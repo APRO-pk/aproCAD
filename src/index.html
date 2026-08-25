@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>APRO CAD</title>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/"
+    }
+  }
+  </script>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <div id="app">
+    <!-- ===== Top Bar ===== -->
+    <div id="topbar">
+      <span class="logo">
+        <span class="logo-mark">⌁</span>
+        APRO <small>CAD</small>
+      </span>
+      <div class="menu" id="ux-file-menu">
+        <button class="tb-btn menu-trigger" id="ux-file-btn">File ▾</button>
+        <div class="menu-pop" id="ux-file-pop">
+          <button class="menu-item" data-action="new">＋ New Document<span class="kbd">Ctrl+N</span></button>
+          <button class="menu-item" data-action="open">📂 Open<span class="kbd">Ctrl+O</span></button>
+          <button class="menu-item" data-action="save">💾 Save<span class="kbd">Ctrl+S</span></button>
+          <button class="menu-item" data-action="save-as">📄 Save As…</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" data-action="export-stl">⬇ Export STL</button>
+          <button class="menu-item" data-action="export-step">⬇ Export STEP</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" data-action="reset-view">◎ Reset View</button>
+          <button class="menu-item" data-action="fullscreen">⛶ Toggle Fullscreen</button>
+        </div>
+      </div>
+      <span id="kind-badge" class="kind-badge"></span>
+      <div class="tb-divider"></div>
+      <select id="preset-select">
+        <optgroup label="General CAD">
+          <option value="solid-bracket" selected>Bracket</option>
+          <option value="lre-demo">Liquid Rocket Engine</option>
+          <option value="full-rocket">Full Rocket (Shorthand)</option>
+          <option value="solid-extrude">Extrude</option>
+          <option value="solid-revolve">Revolve</option>
+          <option value="solid-revolve-chain">Revolve Chain</option>
+          <option value="solid-loft">Loft</option>
+        </optgroup>
+        <optgroup label="Aerospace Shorthands">
+          <option value="bodytube">Body Tube</option>
+          <option value="transition">Transition</option>
+          <option value="tank-hemi">Tank (Hemi)</option>
+          <option value="tank-ellip">Tank (2:1)</option>
+          <option value="fins-3">3 Fins</option>
+          <option value="fins-4">4 Fins</option>
+          <option value="nozzle-conical">Conical Nozzle</option>
+          <option value="nozzle-bell">Bell Nozzle</option>
+          <option value="conical">Conical Nose</option>
+          <option value="ogive">Ogive Nose</option>
+          <option value="power">Power Nose</option>
+          <option value="parabolic">Parabolic Nose</option>
+          <option value="haack">Haack Nose</option>
+          <option value="vonkarman">Von Karman Nose</option>
+        </optgroup>
+      </select>
+      <div class="tb-spacer"></div>
+      <button class="tb-btn icon" id="undo-btn" title="Undo (Ctrl+Z)">↩</button>
+      <button class="tb-btn icon" id="redo-btn" title="Redo (Ctrl+Y)">↪</button>
+      <button class="tb-btn icon" id="format-btn" title="Format RON">{} Format</button>
+      <div class="tb-divider"></div>
+      <button class="tb-btn icon" id="ux-shortcuts-btn" title="Keyboard shortcuts (?)">?</button>
+      <button class="tb-btn icon" id="ai-settings-btn" title="Settings">⚙</button>
+      <button class="tb-btn primary" id="eval-btn">▶ Evaluate</button>
+      <button class="tb-btn" id="stl-btn">.STL</button>
+      <button class="tb-btn" id="step-btn">.STEP</button>
+    </div>
+
+    <!-- ===== Ribbon ===== -->
+    <div id="ribbon">
+      <div id="ribbon-tabs">
+        <button class="ribbon-tab active" data-ribbon="home">Home</button>
+        <button class="ribbon-tab" data-ribbon="sketch">Sketch</button>
+        <button class="ribbon-tab" data-ribbon="features">Features</button>
+        <button class="ribbon-tab" data-ribbon="surfaces">Surfaces</button>
+        <button class="ribbon-tab" data-ribbon="evaluate">Evaluate</button>
+        <button class="ribbon-tab" data-ribbon="ai">AI Studio</button>
+        <button class="ribbon-tab" data-ribbon="view">View</button>
+      </div>
+      <div id="ribbon-panels">
+        <!-- Home -->
+        <div class="ribbon-panel active" data-ribbon-panel="home">
+          <div class="ribbon-group">
+            <span class="group-label">Document</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="new-doc" title="Create a new document"><span class="r-icon">🗋</span>New</button>
+              <button class="ribbon-btn" data-tool="open-doc" title="Open document"><span class="r-icon">🗀</span>Open</button>
+              <button class="ribbon-btn" data-tool="save-doc" title="Save document"><span class="r-icon">💾</span>Save</button>
+              <button class="ribbon-btn" data-tool="library" title="Component library"><span class="r-icon">📦</span>Library</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Export</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="export-stl" title="Export STL mesh"><span class="r-icon">▧</span>STL</button>
+              <button class="ribbon-btn" data-tool="export-step" title="Export STEP"><span class="r-icon">⬠</span>STEP</button>
+              <button class="ribbon-btn" data-tool="export-image" title="Screenshot viewport"><span class="r-icon">📷</span>Image</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Edit</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="undo" data-kbd="Ctrl+Z" title="Undo"><span class="r-icon">↩</span>Undo</button>
+              <button class="ribbon-btn" data-tool="redo" data-kbd="Ctrl+Y" title="Redo"><span class="r-icon">↪</span>Redo</button>
+              <button class="ribbon-btn" data-tool="format" data-kbd="Ctrl+Shift+F" title="Format document"><span class="r-icon">{}</span>Format</button>
+            </div>
+          </div>
+        </div>
+        <!-- Sketch -->
+        <div class="ribbon-panel" data-ribbon-panel="sketch">
+          <div class="ribbon-group">
+            <span class="group-label">Sketch Tools</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="sketch-line" title="Sketch a line"><span class="r-icon">╱</span>Line</button>
+              <button class="ribbon-btn" data-tool="sketch-rect" title="Sketch a rectangle"><span class="r-icon">▭</span>Rectangle</button>
+              <button class="ribbon-btn" data-tool="sketch-circle" title="Sketch a circle"><span class="r-icon">◯</span>Circle</button>
+              <button class="ribbon-btn" data-tool="sketch-arc" title="Sketch an arc"><span class="r-icon">◠</span>Arc</button>
+              <button class="ribbon-btn" data-tool="sketch-spline" title="Sketch a spline"><span class="r-icon">∿</span>Spline</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Constraints</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="constraint-dim" title="Smart dimension"><span class="r-icon">↔</span>Dimension</button>
+              <button class="ribbon-btn" data-tool="constraint-horiz" title="Horizontal constraint"><span class="r-icon">―</span>Horizontal</button>
+              <button class="ribbon-btn" data-tool="constraint-vert" title="Vertical constraint"><span class="r-icon">│</span>Vertical</button>
+              <button class="ribbon-btn" data-tool="constraint-tangent" title="Tangent constraint"><span class="r-icon">◯</span>Tangent</button>
+              <button class="ribbon-btn" data-tool="constraint-coincident" title="Coincident constraint"><span class="r-icon">⊕</span>Coincident</button>
+            </div>
+          </div>
+        </div>
+        <!-- Features -->
+        <div class="ribbon-panel" data-ribbon-panel="features">
+          <div class="ribbon-group">
+            <span class="group-label">Create</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="feat-extrude" title="Extrude a profile"><span class="r-icon">▧</span>Extrude</button>
+              <button class="ribbon-btn" data-tool="feat-revolve" title="Revolve a profile"><span class="r-icon">◍</span>Revolve</button>
+              <button class="ribbon-btn" data-tool="feat-sweep" title="Sweep along a path"><span class="r-icon">➤</span>Sweep</button>
+              <button class="ribbon-btn" data-tool="feat-loft" title="Loft between profiles"><span class="r-icon">≋</span>Loft</button>
+              <button class="ribbon-btn" data-tool="feat-shell" title="Shell a solid"><span class="r-icon">◫</span>Shell</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Modify</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="feat-fillet" title="Fillet edges"><span class="r-icon">◠</span>Fillet</button>
+              <button class="ribbon-btn" data-tool="feat-chamfer" title="Chamfer edges"><span class="r-icon">◥</span>Chamfer</button>
+              <button class="ribbon-btn" data-tool="feat-cut" title="Cut a profile"><span class="r-icon">✂</span>Cut</button>
+              <button class="ribbon-btn" data-tool="feat-mirror" title="Mirror geometry"><span class="r-icon">⇋</span>Mirror</button>
+              <button class="ribbon-btn" data-tool="feat-pattern" title="Pattern geometry"><span class="r-icon">▦</span>Pattern</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Reference</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="ref-plane" title="Create reference plane"><span class="r-icon">▤</span>Plane</button>
+              <button class="ribbon-btn" data-tool="ref-axis" title="Create reference axis"><span class="r-icon">┄</span>Axis</button>
+              <button class="ribbon-btn" data-tool="ref-point" title="Create reference point"><span class="r-icon">•</span>Point</button>
+            </div>
+          </div>
+        </div>
+        <!-- Surfaces -->
+        <div class="ribbon-panel" data-ribbon-panel="surfaces">
+          <div class="ribbon-group">
+            <span class="group-label">Surface Tools</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="surf-extrude" title="Extrude surface"><span class="r-icon">▭</span>Extrude</button>
+              <button class="ribbon-btn" data-tool="surf-revolve" title="Revolve surface"><span class="r-icon">◍</span>Revolve</button>
+              <button class="ribbon-btn" data-tool="surf-loft" title="Loft surface"><span class="r-icon">≋</span>Loft</button>
+              <button class="ribbon-btn" data-tool="surf-offset" title="Offset surface"><span class="r-icon">◨</span>Offset</button>
+              <button class="ribbon-btn" data-tool="surf-fill" title="Fill a boundary"><span class="r-icon">◧</span>Fill</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Surface Ops</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="surf-trim" title="Trim surface"><span class="r-icon">✂</span>Trim</button>
+              <button class="ribbon-btn" data-tool="surf-extend" title="Extend surface"><span class="r-icon">⇄</span>Extend</button>
+              <button class="ribbon-btn" data-tool="surf-thicken" title="Thicken surface"><span class="r-icon">▮</span>Thicken</button>
+            </div>
+          </div>
+        </div>
+        <!-- Evaluate -->
+        <div class="ribbon-panel" data-ribbon-panel="evaluate">
+          <div class="ribbon-group">
+            <span class="group-label">Analysis</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="eval-measure" title="Measure geometry"><span class="r-icon">📏</span>Measure</button>
+              <button class="ribbon-btn" data-tool="eval-mass" title="Mass properties"><span class="r-icon">⚖</span>Mass Props</button>
+              <button class="ribbon-btn" data-tool="eval-check" title="Check geometry"><span class="r-icon">✓</span>Check</button>
+              <button class="ribbon-btn" data-tool="eval-section" title="Section view"><span class="r-icon">▭</span>Section</button>
+              <button class="ribbon-btn" data-tool="eval-clearance" title="Clearance analysis"><span class="r-icon">◌</span>Clearance</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Simulation</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="sim-fea" title="Stress analysis"><span class="r-icon">𝍢</span>FEA</button>
+              <button class="ribbon-btn" data-tool="sim-flow" title="Flow simulation"><span class="r-icon">≈</span>Flow</button>
+              <button class="ribbon-btn" data-tool="sim-flight" title="Flight performance"><span class="r-icon">✈</span>Flight</button>
+            </div>
+          </div>
+        </div>
+        <!-- AI Studio -->
+        <div class="ribbon-panel" data-ribbon-panel="ai">
+          <div class="ribbon-group">
+            <span class="group-label">AI Design</span>
+            <div class="group-btns">
+              <button class="ribbon-btn primary-glow" data-tool="ai-chat" data-kbd="Ctrl+Enter" title="Open AI chat"><span class="r-icon">✦</span>AI Chat</button>
+              <button class="ribbon-btn" data-tool="ai-enhance" title="Enhance current design"><span class="r-icon">✧</span>Enhance</button>
+              <button class="ribbon-btn" data-tool="ai-optimize" title="Optimize dimensions"><span class="r-icon">◎</span>Optimize</button>
+              <button class="ribbon-btn" data-tool="ai-review" title="Review design"><span class="r-icon">🔍</span>Review</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Rocket AI</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="ai-engine" title="Design a liquid engine"><span class="r-icon">🔥</span>Engine</button>
+              <button class="ribbon-btn" data-tool="ai-stage" title="Design a rocket stage"><span class="r-icon">🚀</span>Stage</button>
+              <button class="ribbon-btn" data-tool="ai-optimize-flight" title="Optimize for flight"><span class="r-icon">🛸</span>Flight Opt</button>
+            </div>
+          </div>
+        </div>
+        <!-- View -->
+        <div class="ribbon-panel" data-ribbon-panel="view">
+          <div class="ribbon-group">
+            <span class="group-label">Orientation</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="view-front" title="Front view"><span class="r-icon">▬</span>Front</button>
+              <button class="ribbon-btn" data-tool="view-top" title="Top view"><span class="r-icon">▬</span>Top</button>
+              <button class="ribbon-btn" data-tool="view-right" title="Right view"><span class="r-icon">▬</span>Right</button>
+              <button class="ribbon-btn" data-tool="view-iso" title="Isometric view"><span class="r-icon">◇</span>Isometric</button>
+              <button class="ribbon-btn" data-tool="view-fit" data-kbd="F" title="Zoom to fit"><span class="r-icon">⊞</span>Fit All</button>
+            </div>
+          </div>
+          <div class="ribbon-group">
+            <span class="group-label">Display</span>
+            <div class="group-btns">
+              <button class="ribbon-btn" data-tool="view-wireframe" title="Wireframe mode"><span class="r-icon">◻</span>Wireframe</button>
+              <button class="ribbon-btn" data-tool="view-shaded" title="Shaded mode"><span class="r-icon">◼</span>Shaded</button>
+              <button class="ribbon-btn" data-tool="view-xray" title="X-ray mode"><span class="r-icon">◫</span>X-Ray</button>
+              <button class="ribbon-btn" data-tool="view-grid" title="Toggle grid"><span class="r-icon">▦</span>Grid</button>
+              <button class="ribbon-btn" data-tool="view-axes" title="Toggle axes"><span class="r-icon">✛</span>Axes</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Main Body ===== -->
+    <div id="main-body">
+      <!-- Left Dock -->
+      <div id="editor-panel">
+        <div id="editor-tabs">
+          <button class="tab-btn active" data-tab="tree">Manager</button>
+          <button class="tab-btn" data-tab="editor">Editor</button>
+          <button class="tab-btn" data-tab="chat">Chat</button>
+          <button class="tab-btn" data-tab="inspector">Inspector</button>
+        </div>
+
+        <!-- Feature Manager -->
+        <div id="tree-tab" class="tab-content active">
+          <div id="ux-tree-header">
+            <span class="label">Feature Manager</span>
+            <div class="section-actions">
+              <button id="ux-tree-refresh" title="Refresh tree">↻</button>
+              <button id="ux-tree-collapse" title="Collapse all">−</button>
+            </div>
+          </div>
+          <div id="ux-tree-body"></div>
+        </div>
+
+        <!-- Editor -->
+        <div id="editor-tab" class="tab-content">
+          <div class="section-header">
+            <span class="label">RON Editor</span>
+            <div class="section-actions">
+              <button id="copy-rules-btn" class="tb-btn icon" title="Copy the full RON syntax rules — paste them into any external AI chatbot to request designs">⧉</button>
+              <button id="eval-btn-small" title="Evaluate">▶ Run</button>
+            </div>
+          </div>
+          <div id="editor-wrapper">
+            <textarea id="editor" spellcheck="false">Component(
+    name: "Bracket-1",
+    kind: Solid([
+        Extrude(
+            profile: Points([(0.0, 0.0), (80.0, 0.0), (80.0, 60.0), (40.0, 60.0), (40.0, 20.0), (0.0, 20.0)]),
+            height: 10.0,
+            direction: None,
+            taper: None,
+        ),
+        Extrude(
+            profile: Points([(70.0, 10.0), (75.0, 10.0), (75.0, 15.0), (70.0, 15.0)]),
+            height: 10.0,
+            direction: None,
+            taper: None,
+        ),
+    ]),
+)</textarea>
+          </div>
+        </div>
+
+        <!-- Chat -->
+        <div id="chat-tab" class="tab-content">
+          <div id="chat-header">
+            <div class="chat-head-left">
+              <span class="chat-head-icon">✦</span>
+              <button id="ux-chat-title" title="Switch conversation">
+                <span id="ux-chat-title-text">New conversation</span>
+                <span class="chev">▾</span>
+              </button>
+              <span class="chat-session-dot" id="ux-chat-status" title="Idle"></span>
+            </div>
+            <button id="ux-chat-clear" title="Clear current conversation">🗑</button>
+          </div>
+          <div id="ux-chat-menu" style="display:none"></div>
+          <div id="chat-messages"></div>
+          <div id="chat-suggestions">
+            <button class="sug-chip" data-prompt="Design a 3-fin rocket with a conical nose and body tube">🚀 Design a small rocket</button>
+            <button class="sug-chip" data-prompt="Add a liquid engine nozzle to the current design">🔥 Add an engine nozzle</button>
+            <button class="sug-chip" data-prompt="Reduce the mass of this design">⚖ Reduce mass</button>
+            <button class="sug-chip" data-prompt="Review the current design for issues">🔍 Review my design</button>
+          </div>
+          <div id="chat-input-area">
+            <div id="chat-mode-row">
+              <div id="chat-mode-seg">
+                <button id="ai-mode-btn" title="Analyze without changing the model">Plan</button>
+                <button id="ai-mode-edit" class="active" title="Modify the model automatically">Edit</button>
+              </div>
+              <span id="ai-mode-label">(Edit)</span>
+              <span class="mode-hint" id="ux-mode-hint">modifies the model, evolving it live</span>
+            </div>
+            <div id="chat-prompt-wrap">
+              <div id="chat-textarea-box">
+                <pre id="ai-prompt-hl" aria-hidden="true"></pre>
+                <textarea id="ai-prompt" placeholder="Describe what to design or change..." rows="3"></textarea>
+              </div>
+              <div id="chat-input-actions">
+                <span id="ux-chat-counter">0</span>
+                <button id="ai-send-btn" class="tb-btn primary" title="Send (Enter)"><span class="send-glyph">➤</span>Send</button>
+              </div>
+            </div>
+            <div id="at-mention-pop" style="display:none"></div>
+          </div>
+        </div>
+
+        <!-- Inspector -->
+        <div id="inspector-tab" class="tab-content">
+          <div id="ux-inspector">
+            <div class="insp-card">
+              <h4>Document</h4>
+              <div class="insp-row"><span class="k">Name</span><span class="v teal" id="ux-insp-name">—</span></div>
+              <div class="insp-row"><span class="k">Units</span><span class="v" id="ux-insp-units">—</span></div>
+              <div class="insp-row"><span class="k">Components</span><span class="v violet" id="ux-insp-comps">0</span></div>
+            </div>
+            <div class="insp-card">
+              <h4>Mass Properties</h4>
+              <div class="insp-row"><span class="k">Mass</span><span class="v" id="ux-insp-mass">—</span></div>
+              <div class="insp-row"><span class="k">Volume</span><span class="v" id="ux-insp-volume">—</span></div>
+              <div class="insp-row"><span class="k">CoM</span><span class="v" id="ux-insp-com">—</span></div>
+            </div>
+            <div class="insp-card">
+              <h4>Mesh</h4>
+              <div class="insp-row"><span class="k">Triangles</span><span class="v" id="ux-insp-tris">0</span></div>
+              <div class="insp-row"><span class="k">Vertices</span><span class="v" id="ux-insp-verts">0</span></div>
+              <div class="insp-bar"><div id="ux-insp-meshbar" style="width:0%"></div></div>
+            </div>
+            <div class="insp-card">
+              <h4>Render</h4>
+              <div class="insp-row"><span class="k">Renderer</span><span class="v" id="ux-insp-renderer">—</span></div>
+              <div class="insp-row"><span class="k">Device</span><span class="v" id="ux-insp-device">—</span></div>
+              <div class="insp-row"><span class="k">FPS</span><span class="v" id="ux-insp-fps">—</span></div>
+              <div class="insp-row"><span class="k">Tess Cache</span><span class="v" id="ux-insp-cache">—</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel Resizer -->
+      <div id="panel-resize"></div>
+
+      <!-- Viewport -->
+      <div id="viewport-panel">
+        <div id="viewport-canvas-wrap">
+          <canvas id="viewer"></canvas>
+
+          <!-- Viewport top toolbar -->
+          <div id="vp-toolbar">
+            <button class="vp-btn active" id="vp-rotate" title="Rotate">⟲ Orbit</button>
+            <button class="vp-btn" id="vp-pan" title="Pan">✥ Pan</button>
+            <button class="vp-btn" id="vp-zoom-extents" title="Zoom to fit">⊞ Fit</button>
+            <div class="vp-divider"></div>
+            <button class="vp-btn active" id="vp-grid-toggle" title="Toggle grid">⊞ Grid</button>
+            <button class="vp-btn" id="vp-axes-toggle" title="Toggle axes">✛ Axes</button>
+            <button class="vp-btn" id="vp-wireframe-toggle" title="Toggle wireframe">◻ Wire</button>
+            <button class="vp-btn" id="vp-reset-cam" title="Reset camera">⌂ Home</button>
+          </div>
+
+          <!-- HUD -->
+          <div id="ux-hud">
+            <div class="hud-title"><span>Analysis</span><span class="live">LIVE</span></div>
+            <div class="hud-row"><span class="hk">MASS</span><span class="hv" id="ux-hud-mass">—</span></div>
+            <div class="hud-row"><span class="hk">VOL</span><span class="hv" id="ux-hud-vol">—</span></div>
+            <div class="hud-row"><span class="hk">CoM</span><span class="hv" id="ux-hud-com">—</span></div>
+          </div>
+
+          <!-- ViewCube -->
+          <div id="ux-viewcube-wrap">
+            <div id="ux-viewcube" title="Drag to orbit · click face to view">
+              <div class="vc-face vc-front">F</div>
+              <div class="vc-face vc-back">B</div>
+              <div class="vc-face vc-right">R</div>
+              <div class="vc-face vc-left">L</div>
+              <div class="vc-face vc-top">T</div>
+              <div class="vc-face vc-bottom">D</div>
+            </div>
+            <div id="ux-viewcube-caption">NavCube</div>
+          </div>
+
+          <!-- Left mini-toolbar -->
+          <div id="ux-vp-sidebar">
+            <button class="vp-side-btn active" data-tool="tool-cursor" title="Cursor — select only"><span class="tip">Cursor</span>➤</button>
+            <button class="vp-side-btn" data-tool="tool-move" title="Move selected object (gizmo)"><span class="tip">Move</span>✥</button>
+            <button class="vp-side-btn" data-tool="tool-scale" title="Scale selected object (gizmo)"><span class="tip">Scale</span>⤢</button>
+            <button class="vp-side-btn" data-tool="tool-rotate" title="Rotate selected object (gizmo)"><span class="tip">Rotate</span>⟳</button>
+            <div class="vp-side-sep"></div>
+            <button class="vp-side-btn" data-tool="measure" title="Measure"><span class="tip">Measure</span>📏</button>
+            <button class="vp-side-btn" data-tool="section" title="Section view"><span class="tip">Section</span>▭</button>
+            <button class="vp-side-btn" data-tool="explode" title="Explode view"><span class="tip">Explode</span>⇶</button>
+            <button class="vp-side-btn" data-tool="annotate" title="Annotate"><span class="tip">Annotate</span>✎</button>
+            <button class="vp-side-btn" data-tool="coords" title="Coordinate readout"><span class="tip">Coords</span>⌖</button>
+            <button class="vp-side-btn" data-tool="fullscreen" title="Fullscreen"><span class="tip">Fullscreen</span>⛶</button>
+          </div>
+
+          <!-- Selection chip -->
+          <div id="ux-sel-chip">
+            <span id="ux-sel-label">—</span>
+            <button class="sel-close" id="ux-sel-close" title="Clear selection">✕</button>
+          </div>
+
+          <!-- Viewport info -->
+          <div id="vp-info"></div>
+
+          <!-- Leader line: properties popup -> selected component -->
+          <svg id="vp-leader-line">
+            <line id="leader-seg" />
+            <circle id="leader-dot" r="4" />
+          </svg>
+
+          <!-- Issues overlay -->
+          <div id="issues"></div>
+
+          <!-- Evaluation progress strip -->
+          <div id="eval-progress" style="display:none">
+            <div class="ep-track"><div class="ep-fill" id="ep-fill"></div></div>
+            <div class="ep-label" id="ep-label">Evaluating…</div>
+          </div>
+
+          <!-- Component properties popup (Feature Manager selection) -->
+          <div id="vp-props-popup" style="display:none">
+            <svg id="vp-props-ants"><rect x="1" y="1" rx="12"/></svg>
+            <div id="vp-props-head">
+              <span id="vp-props-icon">▫</span>
+              <span id="vp-props-title">—</span>
+              <span id="vp-props-kind"></span>
+              <button id="vp-props-close" title="Close (Esc)">✕</button>
+            </div>
+            <div id="vp-props-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Status Bar ===== -->
+    <div id="status-bar">
+      <span id="ux-status-mode">Modeling</span>
+      <span id="status-text">Ready</span>
+      <div id="stats-right">
+        <span id="poly-count"></span>
+        <span id="mass-info"></span>
+        <span id="cache-stats"></span>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="undo-toast"></div>
+
+    <!-- Notification stack -->
+    <div id="ux-notify-stack"></div>
+
+    <!-- AI Settings Modal -->
+    <div id="ai-settings-modal" style="display:none;">
+      <div id="ai-settings-backdrop"></div>
+      <div id="ai-settings-dialog">
+        <div id="ai-settings-header">
+          <span>⚙ Settings</span>
+          <button id="ai-settings-close">✕</button>
+        </div>
+        <div class="ai-settings-body">
+          <label>API Key</label>
+          <input type="password" id="ai-api-key" placeholder="sk-..." />
+          <label>Model <span id="ai-constraint-badge" class="constraint-badge" style="display:none;" title="Endpoint rejected schema-constrained output; quality may be lower">unconstrained</span></label>
+          <select id="ai-model-select">
+            <option value="gpt-4o">GPT-4o</option>
+            <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
+            <option value="gpt-4-turbo">GPT-4 Turbo</option>
+            <option value="o3-mini">o3 Mini</option>
+            <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+          </select>
+          <label>API Endpoint</label>
+          <input type="text" id="ai-endpoint" value="https://api.openai.com/v1/chat/completions" />
+        </div>
+        <div id="ai-settings-footer">
+          <button id="ai-settings-save" class="tb-btn primary">Save</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Shortcuts Modal -->
+    <div id="ux-shortcuts-modal" style="display:none;">
+      <div id="ux-shortcuts-backdrop"></div>
+      <div id="ux-shortcuts-dialog">
+        <div id="ux-shortcuts-header">
+          <span>Keyboard Shortcuts</span>
+          <button id="ux-shortcuts-close">✕</button>
+        </div>
+        <div id="ux-shortcuts-body">
+          <div class="sc-row"><span class="sc-desc">Evaluate model</span><span class="sc-keys"><span class="k">Ctrl</span><span class="k">Enter</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Undo</span><span class="sc-keys"><span class="k">Ctrl</span><span class="k">Z</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Redo</span><span class="sc-keys"><span class="k">Ctrl</span><span class="k">Y</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Format RON</span><span class="sc-keys"><span class="k">Ctrl</span><span class="k">Shift</span><span class="k">F</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Zoom to fit</span><span class="sc-keys"><span class="k">F</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Reset camera</span><span class="sc-keys"><span class="k">Home</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Rotate / Pan / Zoom</span><span class="sc-keys"><span class="k">LMB</span><span class="k">RMB</span><span class="k">Scroll</span></span></div>
+          <div class="sc-row"><span class="sc-desc">Send AI prompt</span><span class="sc-keys"><span class="k">Ctrl</span><span class="k">Enter</span></span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic app confirmation (unsaved changes etc.) -->
+  <div id="app-confirm" style="display:none">
+    <div class="del-card">
+      <div class="del-title" id="ac-title">Unsaved changes</div>
+      <div class="del-msg" id="ac-msg"></div>
+      <div class="del-actions">
+        <button id="ac-cancel">Cancel</button>
+        <button id="ac-ok">Discard changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Open-document file picker (input is remounted fresh before each open) -->
+  <div id="open-file-mount" style="display:none"></div>
+
+  <!-- Component library manager -->
+  <div id="library-modal" style="display:none">
+    <div class="lib-card">
+      <div class="lib-head">
+        <span class="lib-title">📦 Component Library</span>
+        <div class="lib-tools">
+          <input id="lib-search" type="text" placeholder="Search parts, tags, descriptions…" />
+          <select id="lib-kind-filter" title="Filter by kind">
+            <option value="">All kinds</option>
+            <option>NoseCone</option><option>BodyTube</option><option>Transition</option>
+            <option>Tank</option><option>Nozzle</option><option>FinSet</option>
+            <option>Solid</option><option>Assembly</option>
+          </select>
+          <button id="lib-new-btn" title="Design a brand-new component">+ New Component</button>
+          <button id="lib-seed" title="Restore the built-in reference parts">Seed builtins</button>
+          <button id="lib-close" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="lib-body-wrap">
+        <div class="lib-body" id="lib-grid"></div>
+        <div id="lib-detail" style="display:none">
+          <div class="ld-head">
+            <button id="lib-back" title="Back to all parts">← All parts</button>
+            <span class="lib-el-icon" id="ld-icon">▫</span>
+            <span class="ld-name" id="ld-name">—</span>
+            <span id="ld-badge" class="lib-badge"></span>
+          </div>
+          <div class="ld-main">
+            <div class="ld-viewport" id="ld-viewport">
+              <canvas id="ld-canvas"></canvas>
+              <div class="ld-hint">drag to orbit · scroll to zoom</div>
+            </div>
+            <div class="ld-side" id="ld-side"></div>
+          </div>
+        </div>
+        <div id="lib-new" style="display:none">
+          <div class="ld-head">
+            <button id="lib-new-back" title="Back to all parts">← All parts</button>
+            <span class="ld-name">New Component</span>
+            <div class="ln-savebar">
+              <input id="ln-name" placeholder="Component name" />
+              <input id="ln-tags" placeholder="tags, comma separated" />
+              <input id="ln-desc" placeholder="Description" />
+              <button id="ln-save" class="lib-btn primary">Save to library</button>
+            </div>
+          </div>
+          <div class="ld-main">
+            <div class="ln-left">
+              <textarea id="ln-editor" spellcheck="false"></textarea>
+              <div class="ln-chat">
+                <div id="ln-chat-log"></div>
+                <div class="ln-chat-input">
+                  <textarea id="ln-chat-prompt" rows="2" placeholder="Describe a component to generate — or ask for changes to the current draft…"></textarea>
+                  <button id="ln-chat-send">Send ➤</button>
+                </div>
+              </div>
+            </div>
+            <div class="ld-viewport" id="ln-viewport">
+              <canvas id="ln-canvas"></canvas>
+              <div class="ld-hint" id="ln-hint">live preview · drag to orbit</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="lib-foot"><span id="lib-count">—</span></div>
+    </div>
+  </div>
+
+  <!-- Library delete confirmation -->
+  <div id="ux-lib-del" style="display:none">
+    <div class="del-card">
+      <div class="del-title">Delete library part?</div>
+      <div class="del-msg" id="ux-lib-del-msg"></div>
+      <div class="del-actions">
+        <button id="ux-lib-del-cancel">Cancel</button>
+        <button id="ux-lib-del-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete-conversation confirmation -->
+  <div id="ux-del-confirm" style="display:none">
+    <div class="del-card">
+      <div class="del-title">Delete conversation?</div>
+      <div class="del-msg" id="ux-del-msg"></div>
+      <div class="del-actions">
+        <button id="ux-del-cancel">Cancel</button>
+        <button id="ux-del-ok">Delete</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Boot diagnostics: surface any module load/eval failure visibly.
+    (function () {
+      function bootFail(msg) {
+        window.__bootError = msg;
+        console.error('[boot]', msg);
+        var s = document.getElementById('status-text');
+        if (s && !s.dataset.bootReported) {
+          s.textContent = msg;
+          s.style.color = '#ff7b7b';
+          s.dataset.bootReported = '1';
+        }
+      }
+      window.__boot = []; // breadcrumb array
+      window.__bootT0 = Date.now();
+      window.addEventListener('error', function (e) {
+        var loc = e.filename ? (' @ ' + e.filename.split(/[\\/]/).pop() + ':' + e.lineno) : '';
+        bootFail('BOOT ERROR: ' + (e.message || e.type) + loc);
+      }, true);
+      window.addEventListener('unhandledrejection', function (e) {
+        if (window.__apro && window.__apro.__ready) return; // late async noise is normal
+        var r = e.reason && (e.reason.message || e.reason) || String(e.reason);
+        bootFail('BOOT ASYNC ERROR: ' + r);
+      });
+    })();
+  </script>
+  <script type="module" src="ux.js"></script>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

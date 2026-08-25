@@ -1,0 +1,26 @@
+Vehicle(
+    name: "SimpleRocket",
+    units: Millimeters,
+    components: [
+        Component(
+            name: "NoseCone",
+            kind: NoseCone(NoseConeParams(
+                profile: VonKarman,
+                length: 200.0,
+                base_radius: 30.0,
+                wall: 2.0,
+                material: "Al-6061-T6",
+            )),
+        ),
+        Component(
+            name: "Body",
+            transform: (position: (0.0, 0.0, 200.0), rotation: (0.0, 0.0, 0.0)),
+            kind: BodyTube(BodyTubeParams(
+                length: 400.0,
+                radius: 30.0,
+                wall: 2.0,
+                material: "Al-6061-T6",
+            )),
+        ),
+    ],
+)

@@ -1,0 +1,9 @@
+Component(
+    name: "BodyTube-1",
+    kind: BodyTube(BodyTubeParams(
+        length: 500.0,
+        radius: 54.0,
+        wall: 2.0,
+        material: "Al-6061-T6",
+    )),
+)

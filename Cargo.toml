@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/geometry",
+    "crates/kernel",
+    "crates/features",
+    "crates/document",
+    "crates/recompute",
+    "crates/massprops",
+    "crates/ron-check",
+    "crates/embed",
+    "crates/library",
+    "crates/grammar",
+    "src-tauri",
+]

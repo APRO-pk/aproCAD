@@ -1,0 +1,10 @@
+Component(
+    name: "Vase",
+    kind: Solid([
+        Revolve(
+            profile: Points([(0.0, 0.0), (50.0, 100.0), (54.0, 300.0)]),
+            angle: 360.0,
+            axis: Some(Z),
+        ),
+    ]),
+)

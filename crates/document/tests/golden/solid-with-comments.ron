@@ -1,0 +1,14 @@
+// A bracket with two extrusions
+// This file tests that // comments parse correctly
+Component(
+    name: "CommentedPart",
+    kind: Solid([
+        // First extrusion: main body
+        Extrude(
+            profile: Points([(0.0, 0.0), (100.0, 0.0), (100.0, 50.0), (0.0, 50.0)]),
+            height: 10.0,
+            direction: None,
+            taper: None,
+        ),
+    ]),
+)

@@ -1,0 +1,12 @@
+Component(
+    name: "Nozzle-1",
+    kind: Nozzle(NozzleParams(
+        kind: Bell,
+        throat_radius: 20.0,
+        expansion_ratio: 16.0,
+        percent_bell: 85.0,
+        chamber_radius: 60.0,
+        wall: 3.0,
+        material: "Inconel-718",
+    )),
+)

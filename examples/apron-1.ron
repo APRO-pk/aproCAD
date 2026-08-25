@@ -1,0 +1,39 @@
+Vehicle(
+    name: "APRON-1",
+    units: Millimeters,
+    components: [
+        Component(
+            name: "NoseCone-1",
+            kind: NoseCone(
+                profile: VonKarman,
+                length: 300.0,
+                base_radius: 54.0,
+                wall: 2.0,
+                material: "Al-6061-T6",
+            ),
+        ),
+        Component(
+            name: "Body-1",
+            transform: (position: (0.0, 0.0, 300.0), rotation: (0.0, 0.0, 0.0)),
+            kind: BodyTube(
+                length: 700.0,
+                radius: 54.0,
+                wall: 2.0,
+                material: "CFRP",
+            ),
+        ),
+        Component(
+            name: "Nozzle-1",
+            transform: (position: (0.0, 0.0, 1000.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Nozzle(
+                kind: Bell,
+                throat_radius: 12.0,
+                expansion_ratio: 8.0,
+                percent_bell: 80.0,
+                chamber_radius: 40.0,
+                wall: 3.0,
+                material: "Graphite",
+            ),
+        ),
+    ],
+)

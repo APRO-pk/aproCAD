@@ -1,0 +1,11 @@
+[package]
+name = "apro-recompute"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+apro-document = { path = "../document" }
+apro-features = { path = "../features" }
+apro-kernel = { path = "../kernel" }
+ron = "0.8"
+rayon = "1"

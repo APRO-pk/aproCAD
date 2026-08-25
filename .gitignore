@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+
+# Node / frontend build
+node_modules/
+dist/
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Local env / secrets
+.env
