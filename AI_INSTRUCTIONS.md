@@ -98,6 +98,13 @@ Path3D = Line(start: (f64,f64,f64), end: (f64,f64,f64))           // struct vari
 IMPORTANT: All struct variants in RON use `()` parentheses, never `{}` braces. This applies to enum variants like `Line(...)`, `Arc(...)`, `Helix(...)` and also to SolidOp variants like `Extrude(...)`, `Revolve(...)`, etc.
 
 Wrong: `Line((0,0,0),(0,0,17))` — positional args for a named-field variant → "Expected identifier"
+
+Usage in `Sweep` (profile is the cross-section; the path leads away from it):
+- `path: Line(start: (0,0,0), end: (0,0,17))` — straight
+- `path: Arc(center: (40,0,0), radius: 30, start_angle: -90, end_angle: 90)` — circular arc **in the XY plane** at height `center.z`
+- `path: Spline([(0,0,0),(20,10,30),(-10,25,70)])` — Catmull-Rom curve **through** every point → smooth bends (sprung fuel lines, ducts)
+- `path: Helix(radius: 20, pitch: 15, turns: 3)` — spring/coil
+Curved paths let you make pipes, ducts, springs and feed lines a straight `Line` cannot.
 Wrong: `Line { start:..., end:... }` — RON doesn't use `{}` → "Expected opening `(`"
 Right: `Line(start: (0.0,0.0,0.0), end: (0.0,0.0,17.0))`
 

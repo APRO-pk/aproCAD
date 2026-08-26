@@ -129,7 +129,24 @@ pub fn convert_path(path: &Path3D, _samples: u32) -> Result<Vec<[f64; 3]>, Strin
                 return Err("spline path must have at least 2 points".into());
             }
             let arr: Vec<[f64; 3]> = points.iter().map(|p| [p.0, p.1, p.2]).collect();
-            Ok(arr)
+            if points.len() == 2 {
+                return Ok(arr); // straight segment, nothing to smooth
+            }
+            // Catmull-Rom: C1-continuous curve passing THROUGH every control point.
+            let per_span = ((_samples.max(16) as usize) / (points.len() - 1)).max(8);
+            let mut pts: Vec<[f64; 3]> = Vec::with_capacity(per_span * (points.len() - 1) + 1);
+            for span in 0..points.len() - 1 {
+                let p0 = if span == 0 { arr[0] } else { arr[span - 1] };
+                let p1 = arr[span];
+                let p2 = arr[span + 1];
+                let p3 = if span + 2 < arr.len() { arr[span + 2] } else { arr[arr.len() - 1] };
+                for s in 0..per_span {
+                    let t = s as f64 / per_span as f64;
+                    pts.push(catmull_rom_point(p0, p1, p2, p3, t));
+                }
+            }
+            pts.push(arr[arr.len() - 1]);
+            Ok(pts)
         }
         Path3D::Helix { radius, pitch, turns } => {
             let n = (_samples as f64 * turns).ceil() as u32;
@@ -144,6 +161,20 @@ pub fn convert_path(path: &Path3D, _samples: u32) -> Result<Vec<[f64; 3]>, Strin
             Ok(pts)
         }
     }
+}
+
+/// Uniform Catmull-Rom spline point: C1-continuous, passes through p1->p2.
+fn catmull_rom_point(p0:[f64;3],p1:[f64;3],p2:[f64;3],p3:[f64;3],t:f64)->[f64;3]{
+    let t2=t*t;
+    let t3=t2*t;
+    let mut out=[0.0f64;3];
+    for i in 0..3 {
+        out[i]=0.5*((2.0*p1[i])
+            +(-p0[i]+p2[i])*t
+            +(2.0*p0[i]-5.0*p1[i]+4.0*p2[i]-p3[i])*t2
+            +(-p0[i]+3.0*p1[i]-3.0*p2[i]+p3[i])*t3);
+    }
+    out
 }
 
 /// Evaluate a SolidOp stack and produce a mesh.
@@ -349,8 +380,7 @@ mod tests {
     fn test_expand_circle_profile() {
         let p = Profile::Circle { radius: 10.0 };
         let pts = expand_profile(&p, 12, &ParamEnv::new()).unwrap();
-        assert_eq!(pts.len(), 12);
-        for &[x, y] in &pts {
+        assert_eq!(pts.len(), 12);        for &[x, y] in &pts {
             let r = (x * x + y * y).sqrt();
             assert!((r - 10.0).abs() < 1e-6);
         }
@@ -392,7 +422,12 @@ mod tests {
     fn test_convert_spline_path() {
         let path = Path3D::Spline(vec![(0.0, 0.0, 0.0), (50.0, 0.0, 10.0), (100.0, 0.0, 0.0)]);
         let pts = convert_path(&path, 0).unwrap();
-        assert_eq!(pts.len(), 3);
+        // Catmull-Rom smooths: densely sampled, passes through every control point.
+        assert!(pts.len() > 3, "spline is now smoothed: {}", pts.len());
+        assert_eq!(pts.first().unwrap().to_vec(), [0.0, 0.0, 0.0]);
+        assert_eq!(pts.last().unwrap().to_vec(), [100.0, 0.0, 0.0]);
+        let near_mid = pts.iter().any(|p| (p[0] - 50.0).abs() < 1e-6 && (p[1] - 0.0).abs() < 1e-6);
+        assert!(near_mid, "passes through interior control point");
     }
 
     #[test]

@@ -1,0 +1,11 @@
+// Curved sweeps: Spline (Catmull-Rom) path + Arc path, each on its own component.
+Component(
+    name: "CurvedDuct",
+    kind: Solid([
+        Sweep(
+            profile: Points([(-4.0, -4.0), (4.0, -4.0), (4.0, 4.0), (-4.0, 4.0)]),
+            path: Spline([(0.0, 0.0, 0.0), (20.0, 10.0, 30.0), (-10.0, 25.0, 70.0), (0.0, 0.0, 110.0)]),
+            twist: None,
+        ),
+    ]),
+)
