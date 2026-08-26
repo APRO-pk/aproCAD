@@ -16,9 +16,13 @@ use std::path::PathBuf;
 use ron::from_str;
 use apro_library::{Library, RetrievalQuery, Source};
 
+
+pub mod needle;
+
 pub struct AppState {
     pub engine: Mutex<RecomputeEngine>,
     pub library: Mutex<Option<Library>>,
+    pub needle: Mutex<Option<crate::needle::NeedleWorker>>,
 }
 
 impl Default for AppState {
@@ -26,6 +30,7 @@ impl Default for AppState {
         AppState {
             engine: Mutex::new(RecomputeEngine::new()),
             library: Mutex::new(None),
+            needle: Mutex::new(None),
         }
     }
 }
@@ -49,6 +54,8 @@ pub struct EvaluateResult {
     /// One mesh per evaluated component (assembly space) so the frontend can
     /// render each in its own color. Empty for single-component evaluations.
     pub components: Vec<ComponentMesh>,
+    /// Pairs of components whose meshes physically overlap.
+    pub interferences: Vec<Interference>,
     pub issues: Vec<Issue>,
     pub success: bool,
     pub component_count: u32,
@@ -66,6 +73,23 @@ pub struct ComponentMesh {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+}
+
+impl ComponentMesh {
+    fn to_mesh(&self) -> MeshData {
+        MeshData {
+            positions: self.positions.clone(),
+            normals: self.normals.clone(),
+            indices: self.indices.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Interference {
+    pub a: String,
+    pub b: String,
+    pub volume: f64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -282,6 +306,25 @@ fn describe_kind(kind: &ComponentKind) -> Vec<PropertyRow> {
                         for (j, seg) in segments.iter().enumerate() {
                             r.push(points_row(&format!("op_{}_seg_{}", i, j), seg));
                         }
+                    }
+                    SolidOp::Hole { diameter, depth, axis } => {
+                        r.push(float_row(&format!("op_{}_diameter", i), *diameter));
+                        r.push(float_row(&format!("op_{}_depth", i), *depth));
+                        r.push(string_row(&format!("op_{}_axis", i), &format!("{:?}", axis)));
+                    }
+                    SolidOp::BoltCircle { count, pitch_diameter, hole_diameter, depth } => {
+                        r.push(int_row(&format!("op_{}_count", i), *count));
+                        r.push(float_row(&format!("op_{}_pitch_diameter", i), *pitch_diameter));
+                        r.push(float_row(&format!("op_{}_hole_diameter", i), *hole_diameter));
+                        r.push(float_row(&format!("op_{}_depth", i), *depth));
+                    }
+                    SolidOp::RectPattern { x_count, y_count, spacing_x, spacing_y, hole_diameter, depth } => {
+                        r.push(int_row(&format!("op_{}_x_count", i), *x_count));
+                        r.push(int_row(&format!("op_{}_y_count", i), *y_count));
+                        r.push(float_row(&format!("op_{}_spacing_x", i), *spacing_x));
+                        r.push(float_row(&format!("op_{}_spacing_y", i), *spacing_y));
+                        r.push(float_row(&format!("op_{}_hole_diameter", i), *hole_diameter));
+                        r.push(float_row(&format!("op_{}_depth", i), *depth));
                     }
                 }
             }
@@ -547,6 +590,7 @@ fn evaluate(component_ron: String) -> Result<EvaluateResult, String> {
         success: mesh.is_some() && issues.iter().all(|i| i.severity != IssueSeverity::Error),
         mesh,
         components: vec![],
+        interferences: vec![],
         issues,
         component_count: 1,
         mass_props,
@@ -591,12 +635,92 @@ fn evaluate_vehicle(
         success: mesh.positions.len() > 0 && issues.iter().all(|i| i.severity != IssueSeverity::Error),
         mesh: Some(mesh),
         components,
+        interferences: vec![],
         issues,
         component_count: vehicle.components.len() as u32,
         mass_props,
         cache_hits: hits,
         cache_misses: misses,
     })
+}
+
+/// Pairwise assembly-space overlap check over every component mesh.
+/// Budgeted so it never stalls: CSG cost scales with the PRODUCT of the two
+/// parts' triangle counts, so each pair is capped on that product; pairs are
+/// capped too. Returns only genuine overlaps (volume above epsilon).
+fn detect_interferences(comps: &[ComponentMesh]) -> Vec<Interference> {
+    const MAX_PAIRS: usize = 32;
+    const MAX_TRIS: usize = 200_000;      // whole assembly budget
+    const MAX_PAIR_PRODUCT: u64 = 8_000_000; // a.tris * b.tris cap (≈ a few seconds max)
+
+    let tot_tris: usize = comps.iter().map(|c| c.indices.len() / 3).sum();
+    if comps.len() < 2 || tot_tris > MAX_TRIS {
+        return Vec::new();
+    }
+
+    let boxes: Vec<Option<[f32; 6]>> = comps.iter().map(|c| {
+        if c.positions.len() < 9 { None } else { apro_kernel::aabb(&c.to_mesh()) }
+    }).collect();
+
+    let mut out = Vec::new();
+    let mut pairs_tested = 0usize;
+    for i in 0..comps.len() {
+        let Some(bi) = boxes[i] else { continue; };
+        let ta = (comps[i].indices.len() / 3) as u64;
+        for j in (i + 1)..comps.len() {
+            if pairs_tested >= MAX_PAIRS { return out; }
+            let Some(bj) = boxes[j] else { continue; };
+            if bi[0] > bj[3] || bj[0] > bi[3] || bi[1] > bj[4] || bj[1] > bi[4] || bi[2] > bj[5] || bj[2] > bi[5] {
+                continue;
+            }
+            let tb = (comps[j].indices.len() / 3) as u64;
+            if ta * tb > MAX_PAIR_PRODUCT {
+                continue; // this pair would take too long — skip, don't block the app
+            }
+            pairs_tested += 1;
+            if let Some(vol) = apro_kernel::meshes_overlap_volume(&comps[i].to_mesh(), &comps[j].to_mesh()) {
+                out.push(Interference { a: comps[i].name.clone(), b: comps[j].name.clone(), volume: vol });
+            }
+        }
+    }
+    out
+}
+
+/// Invoked by the frontend AFTER an evaluate returns, so a heavy assembly
+/// never blocks the viewport. Cheap enough to call as a fire-and-forget.
+#[tauri::command]
+fn check_interferences(
+    vehicle_ron: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<Interference>, String> {
+    let vehicle: Vehicle = ron::from_str(&vehicle_ron)
+        .map_err(|e| format!("Failed to parse vehicle RON: {}", e))?;
+    let mut engine = state.engine.lock().map_err(|e| format!("Lock error: {}", e))?;
+    // Reuse the engine cache (already evaluated) — no re-tessellation.
+    let comps: Vec<ComponentMesh> = engine.component_meshes(&vehicle).into_iter().map(|(name, material, color, m)| {
+        let visible = vehicle.components.iter().find(|c| c.name == name).map(|c| c.visible).unwrap_or(true);
+        ComponentMesh { name, material, color, visible, positions: m.positions, normals: m.normals, indices: m.indices }
+    }).collect();
+    Ok(detect_interferences(&comps))
+}
+
+/// Needle Mode (spike): run one `complete()` turn against the warm in-process
+/// tool-calling model. `tools` are JSON schemas (e.g. from `get_ai_schema`);
+/// the host must execute any returned `function_calls` itself and feed the
+/// result back via a follow-up `needle_run`.
+#[tauri::command]
+fn needle_run(
+    query: String,
+    tools: Vec<serde_json::Value>,
+    reset: Option<bool>,
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
+    let req = crate::needle::NeedleRequest {
+        query,
+        tools,
+        reset: reset.unwrap_or(false),
+    };
+    crate::needle::needle_run_impl(&state.needle, &req)
 }
 
 #[tauri::command]
@@ -956,7 +1080,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file])
+        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file, check_interferences, needle_run])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -998,8 +998,29 @@ async function evaluate() {
       }
     }
 
-    showIssues(result.issues);
-    clearMeshes();
+      showIssues(result.issues);
+      // Fire-and-forget interference check: never blocks the viewport.
+      // Runs AFTER evaluate returns, using the engine cache (no re-tessellation).
+      if (isVehicle && (result.components || []).length > 1) {
+        invoke('check_interferences', { vehicleRon: ron })
+          .then(interferences => {
+            if (interferences && interferences.length > 0) {
+              const extra = interferences.map(it => ({
+                severity: 'Warning',
+                message: `Interference: '${it.a}' overlaps '${it.b}' (~${it.volume.toFixed(1)} mm³). Move, shrink or remove one.`,
+                component: null,
+              }));
+              // Merge into the issues list for this evaluate_vehicle pass.
+              showIssues([...(result.issues || []), ...extra]);
+              lastInterferenceBlock =
+                '\n\n## Interference warnings (parts physically overlap)\n' +
+                extra.map(e => '- ' + e.message).join('\n') +
+                '\nResolve every interference (move, shrink, or remove a part) before the design is done.';
+            }
+          })
+          .catch(() => {});
+      }
+      clearMeshes();
     clearSelectionOutline();
 
     if (result.mesh) {
@@ -4244,7 +4265,8 @@ const RON_RULES =
   '- Tank: dome is `Hemispherical` or `Ellipsoidal { ratio: <float> }`; wall positive.\n' +
   '- Mating: when a body tube exists, a Nose base_radius and a Nozzle chamber_radius must match the body radius (within 2.0). Plan the same radius for parts that join!\n' +
   '- Mating dimensions must be set EXPLICITLY when adding a component — never leave a default (e.g. set Nozzle chamber_radius, Nose base_radius, Tank radius, Body radius/wall in the same AddComponent). The engine checks mating AFTER every patch: a mismatch rejects the whole patch.\n' +
-  '- Fitting: a Tank (or other internal part) must fit inside the Body it mounts in: tank.radius + tank.wall <= body.radius - body.wall. If a request specifies conflicting radii, adjust the inner part\'s radius (and note it) rather than failing.';
+  '- Fitting: a Tank (or other internal part) must fit inside the Body it mounts in: tank.radius + tank.wall <= body.radius - body.wall. If a request specifies conflicting radii, adjust the inner part\'s radius (and note it) rather than failing.\n' +
+  '- Interference: `evaluate_vehicle` reports an "Interference: X overlaps Y (vol mm³)" warning whenever two parts physically intersect. Always resolve these — move, shrink, or remove one part — before calling the design done.\n';
 
 // Tauri rejects with plain strings; browsers reject with Errors. Normalize so
 // the repair loop and the log always see the real message.
@@ -4338,9 +4360,11 @@ async function buildSystemPrompt(userPrompt, opts = {}) {
     } catch {}
   }
 
-  // @-mentioned component data (resolved at send time) reaches every call.
-  if (mentionContextBlock) prompt += mentionContextBlock;
-  return { prompt, hitIds };
+// @-mentioned component data (resolved at send time) reaches every call.
+if (mentionContextBlock) prompt += mentionContextBlock;
+// Latest interference warnings (from the async check) so the AI fixes them.
+if (lastInterferenceBlock) prompt += lastInterferenceBlock;
+return { prompt, hitIds };
 }
 
 // Phase 2: schema/GBNF-constrained generation
@@ -5201,6 +5225,7 @@ if (chatClearBtn) {
 
 // ===== @-mention -> AI context injection =====
 let mentionContextBlock = '';
+let lastInterferenceBlock = '';
 
 // Extracts @Names from the prompt and builds a data block describing those
 // components, consumed by buildSystemPrompt so EVERY AI call in the session
@@ -5320,6 +5345,7 @@ aiSendBtn.addEventListener('click', async () => {
     addChatMessage({ role: 'assistant', content: '**Error:** ' + String(err), mode: aiMode });
   } finally {
     mentionContextBlock = '';
+    lastInterferenceBlock = '';
     setChatBusy(false);
     aiPrompt.focus();
   }

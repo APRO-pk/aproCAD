@@ -16,6 +16,57 @@ impl Default for MeshData {
     }
 }
 
+/// Axis-aligned bounding box of the mesh: (minx,miny,minz,maxx,maxy,maxz).
+/// Returns None for empty geometry.
+pub fn aabb(mesh: &MeshData) -> Option<[f32; 6]> {
+    if mesh.positions.is_empty() {
+        return None;
+    }
+    let (mut minx, mut miny, mut minz) = (f32::MAX, f32::MAX, f32::MAX);
+    let (mut maxx, mut maxy, mut maxz) = (f32::MIN, f32::MIN, f32::MIN);
+    for p in mesh.positions.chunks_exact(3) {
+        minx = minx.min(p[0]); miny = miny.min(p[1]); minz = minz.min(p[2]);
+        maxx = maxx.max(p[0]); maxy = maxy.max(p[1]); maxz = maxz.max(p[2]);
+    }
+    Some([minx, miny, minz, maxx, maxy, maxz])
+}
+
+/// Signed volume of a closed triangle mesh (positive for outward normals).
+pub fn signed_volume(mesh: &MeshData) -> f64 {
+    let pos = &mesh.positions;
+    let mut vol = 0.0;
+    for tri in mesh.indices.chunks_exact(3) {
+        let a = [pos[tri[0] as usize * 3] as f64, pos[tri[0] as usize * 3 + 1] as f64, pos[tri[0] as usize * 3 + 2] as f64];
+        let b = [pos[tri[1] as usize * 3] as f64, pos[tri[1] as usize * 3 + 1] as f64, pos[tri[1] as usize * 3 + 2] as f64];
+        let c = [pos[tri[2] as usize * 3] as f64, pos[tri[2] as usize * 3 + 1] as f64, pos[tri[2] as usize * 3 + 2] as f64];
+        vol += (a[0] * (b[1] * c[2] - c[1] * b[2])
+            - b[0] * (a[1] * c[2] - c[1] * a[2])
+            + c[0] * (a[1] * b[2] - b[1] * a[2])) / 6.0;
+    }
+    vol.abs()
+}
+
+/// Overlap volume of two meshes, or None if they don't genuinely intersect.
+/// One CSG call (no double work). Quick AABB reject first.
+pub fn meshes_overlap_volume(a: &MeshData, b: &MeshData) -> Option<f64> {
+    let Some(ba) = aabb(a) else { return None; };
+    let Some(bb) = aabb(b) else { return None; };
+    if ba[0] > bb[3] || bb[0] > ba[3] || ba[1] > bb[4] || bb[1] > ba[4] || ba[2] > bb[5] || bb[2] > ba[5] {
+        return None; // AABBs disjoint
+    }
+    let inter = crate::csg::mesh_boolean(a, b, &crate::ops::BooleanKind::Intersection).ok()?;
+    if inter.positions.len() == 0 {
+        return None;
+    }
+    let vol = signed_volume(&inter);
+    if vol > 1e-5 { Some(vol) } else { None }
+}
+
+/// Do two (assembly-space) triangle meshes physically overlap?
+pub fn meshes_overlap(a: &MeshData, b: &MeshData) -> bool {
+    meshes_overlap_volume(a, b).is_some()
+}
+
 pub fn solid_to_meshdata(solid: &Solid, tolerance: f64) -> MeshData {
     let tessellated = solid.triangulation(tolerance);
     let polygon: PolygonMesh = tessellated.to_polygon();
@@ -170,4 +221,47 @@ pub fn watertight(mesh: &MeshData) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ops::extrude;
+    use crate::ops::BooleanKind;
+
+    fn cube(size: f64, dx: f64) -> MeshData {
+        // Extrude a square profile along Z, then shift by `dx` on X.
+        let profile = vec![[0.0, 0.0], [size, 0.0], [size, size], [0.0, size]];
+        let solid = extrude(&profile, size).expect("cube extrude");
+        let mut m = crate::mesh::solid_to_meshdata(&solid, 1.0);
+        for p in m.positions.chunks_exact_mut(3) { p[0] += dx as f32; }
+        m
+    }
+
+    #[test]
+    fn test_aabb_and_volume() {
+        let m = cube(10.0, 0.0);
+        let bb = aabb(&m).expect("aabb");
+        assert!((bb[0] - 0.0).abs() < 1e-3 && (bb[3] - 10.0).abs() < 1e-3);
+        let vol = signed_volume(&m);
+        assert!((vol - 1000.0).abs() < 1.0, "cube volume ~1000, got {vol}");
+    }
+
+    #[test]
+    fn test_meshes_overlap_true_and_false() {
+        let a = cube(10.0, 0.0);
+        let overlap = cube(10.0, 5.0);   // shares 5mm on X -> overlaps
+        let apart = cube(10.0, 50.0);    // far away
+        assert!(meshes_overlap(&a, &overlap), "overlapping cubes must be detected");
+        assert!(!meshes_overlap(&a, &apart), "separated cubes must not interfere");
+    }
+
+    #[test]
+    fn test_intersection_volume_threshold() {
+        let a = cube(10.0, 0.0);
+        let overlap = cube(10.0, 5.0);
+        let inter = crate::csg::mesh_boolean(&a, &overlap, &BooleanKind::Intersection).expect("intersection");
+        let vol = signed_volume(&inter);
+        assert!(vol > 1.0, "5mm overlap should have real volume ~500, got {vol}");
+    }
 }

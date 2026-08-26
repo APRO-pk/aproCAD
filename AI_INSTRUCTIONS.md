@@ -226,6 +226,8 @@ These are areas where the AI often generates wrong code. Cross-check output care
 | Parameters pretty form | AI writes `Parameters(body_od: 98.0)` instead of the list form `parameters: Some([Parameter(name: "body_od", value: 98.0), ...])` | COMMON — pretty block only accepted on manual input; see Parameters section |
 | Parameters equation syntax | `2wall` (missing `*`), unquoted equations, or referencing an unknown name → patch rejected | COMMON — see Parameters section |
 
+**Interference (2026-08):** evaluate_vehicle issues a warning “Interference: X overlaps Y (~N mm³)” whenever any two components’ meshes intersect (measured via a CSG intersection volume above a tiny epsilon, so merely-touching seams don’t count). Always resolve interference before marking a design done — move, shrink or remove one of the parts. Bolt-with-hole and shaft-with-bore connections that fit are NOT flagged, so a flagged pair is a real problem.
+
 ## Validation Tool
 Use `cargo run --bin ron-check path/to/file.ron` to validate a RON file against the parser without launching the full app. Returns 0 on success, prints parse errors on failure. This is the fastest way to check AI output.
 
