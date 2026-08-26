@@ -1,0 +1,14 @@
+// Machined features: bolt circle drilled into a plate. Verifies the schema
+// accepts the new SolidOp variants and they parse/round-trip.
+Component(
+    name: "MountPlate",
+    kind: Solid([
+        Extrude(
+            profile: Rectangle(width: 80.0, height: 80.0, corner_radius: None),
+            height: 8.0,
+            direction: None,
+            taper: None,
+        ),
+        BoltCircle(count: 6, pitch_diameter: 60.0, hole_diameter: 8.0, depth: 8.0),
+    ]),
+)

@@ -154,6 +154,29 @@ pub enum SolidOp {
         distance: f64,
         edges: EdgeRef,
     },
+    // Machined features: drilled holes & patterns (cut into the current stack).
+    /// A single drilled hole along an axis through the local origin.
+    Hole {
+        diameter: f64,
+        depth: f64,
+        axis: Axis,
+    },
+    /// A ring of `count` holes on a bolt circle centred on the Z axis.
+    BoltCircle {
+        count: u32,
+        pitch_diameter: f64,
+        hole_diameter: f64,
+        depth: f64,
+    },
+    /// A rectangular grid of holes in the XY plane, centred on the Z axis.
+    RectPattern {
+        x_count: u32,
+        y_count: u32,
+        spacing_x: f64,
+        spacing_y: f64,
+        hole_diameter: f64,
+        depth: f64,
+    },
     TransformOp {
         translate: Option<Vec3>,
         rotate: Option<Vec3>,

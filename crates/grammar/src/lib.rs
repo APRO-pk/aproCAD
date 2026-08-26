@@ -528,4 +528,12 @@ mod tests {
         let schema = schema_for_component();
         assert!(schema_json_contains(&schema, "color"), "component schema must include the color field");
     }
+
+    #[test]
+    fn machined_features_in_schema() {
+        let schema = schema_for_vehicle();
+        for op in ["Hole", "BoltCircle", "RectPattern"] {
+            assert!(schema_json_contains(&schema, op), "solid op {op} must be in the vehicle schema");
+        }
+    }
 }

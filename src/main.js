@@ -1874,7 +1874,7 @@ function buildSolidToolbar(comp) {
   defaultOp.disabled = true;
   defaultOp.selected = true;
   addSelect.appendChild(defaultOp);
-  ['Revolve','RevolveChain','Extrude','Loft','Transform'].forEach(t => {
+  ['Revolve','RevolveChain','Extrude','Loft','BoltCircle','RectPattern','Hole','Transform'].forEach(t => {
     const opt = document.createElement('option');
     opt.textContent = t;
     addSelect.appendChild(opt);
@@ -1888,6 +1888,9 @@ function buildSolidToolbar(comp) {
       RevolveChain: 'RevolveChain(segments:[[(0.0,0.0),(200.0,50.0),(200.0,50.0)],[(0.0,50.0),(300.0,50.0)]],angle:360.0)',
       Extrude: 'Extrude(profile:Points([(0.0,0.0),(100.0,0.0),(100.0,50.0),(0.0,50.0)]),height:100.0,direction:None,taper:None)',
       Loft: 'Loft(profiles:[Points([(0.0,0.0),(50.0,0.0),(25.0,40.0)]),Points([(0.0,0.0),(80.0,0.0),(40.0,60.0)])],guide_curves:None)',
+      Hole: 'Hole(diameter:12.0,depth:10.0,axis:Z)',
+      BoltCircle: 'BoltCircle(count:6,pitch_diameter:60.0,hole_diameter:8.0,depth:8.0)',
+      RectPattern: 'RectPattern(x_count:4,y_count:4,spacing_x:20.0,spacing_y:20.0,hole_diameter:6.0,depth:6.0)',
       Transform: 'TransformOp(translate:Some((0.0,0.0,0.0)),rotate:None,scale:None)',
     }[opType];
     const ron = editor.value;
@@ -4237,6 +4240,7 @@ const RON_RULES =
   '- Nozzle: throat_radius must be < chamber_radius.\n' +
   '- FinSet: count must be >= 3; span, chords and thickness positive.\n' +
   '- Solid: must contain at least one op (Revolve, Extrude, Loft, ...) — never an empty list.\n' +
+  '- Machined features: `Hole(diameter, depth, axis)`, `BoltCircle(count, pitch_diameter, hole_diameter, depth)`, `RectPattern(x_count, y_count, spacing_x, spacing_y, hole_diameter, depth)` cut into the current stack and MUST come after the body op. Use them for mounting holes, bolt rings and lightening grids; depth >= body thickness to punch through.\n' +
   '- Tank: dome is `Hemispherical` or `Ellipsoidal { ratio: <float> }`; wall positive.\n' +
   '- Mating: when a body tube exists, a Nose base_radius and a Nozzle chamber_radius must match the body radius (within 2.0). Plan the same radius for parts that join!\n' +
   '- Mating dimensions must be set EXPLICITLY when adding a component — never leave a default (e.g. set Nozzle chamber_radius, Nose base_radius, Tank radius, Body radius/wall in the same AddComponent). The engine checks mating AFTER every patch: a mismatch rejects the whole patch.\n' +

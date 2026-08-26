@@ -40,8 +40,16 @@ RevolveChain(segments: [[(x,y),...],[(x,y),...]], angle: 360.0)
 Loft(profiles: [Points([...]), Points([...])], guide_curves: None)
 Sweep(profile: Points([(x,y),...]), path: Path3D, twist: None)
 Boolean(kind: Union|Difference|Intersection, target: Component("Name")|This)
+Hole(diameter: 12.0, depth: 10.0, axis: Z)
+BoltCircle(count: 6, pitch_diameter: 60.0, hole_diameter: 8.0, depth: 8.0)
+RectPattern(x_count: 4, y_count: 4, spacing_x: 20.0, spacing_y: 20.0, hole_diameter: 6.0, depth: 6.0)
 TransformOp(translate: Some((0,0,0)), rotate: None, scale: None)
 ```
+
+**Machined features (2026-08): SUPPORTED.** These cut holes/patterns into the current op stack (they behave exactly like a `Boolean` Difference against a cylinder; they must come AFTER an Extrude/Revolve/Loft/Sweep that creates the body — never first). All are centred on the local origin / Z axis; the pattern is centred on Z; `depth` is how far the hole extends upward from Z=0 (use a depth ≥ the body thickness to punch through).
+- `Hole(diameter, depth, axis: X|Y|Z)` — one drilled hole.
+- `BoltCircle(count, pitch_diameter, hole_diameter, depth)` — `count` (must be ≥ 3) holes on a ring; ideal for mounting flanges, burp discs, motor mounts.
+- `RectPattern(x_count, y_count, spacing_x, spacing_y, hole_diameter, depth)` — a centred rectangular grid of holes (lightening / bolt grids). Put the op straight after the body; the cut drops vertex mass so `evaluate_vehicle` gives a lighter, realistic part.
 
 **CONFIRMED (2026-07): Revolve profile points are `(height, radius)`, NOT `(radius, height)`.** The first value is the position along the revolve axis (Z); the second is the radial distance from the axis. Getting this backwards produces a squashed, oversized result (wide flat disc instead of a tall part) rather than a parse error. This convention applies to `Points` used in `Revolve` and `RevolveChain`; not yet independently verified for `Extrude`/`Loft`/`Sweep` — don't assume they share this order until tested.
 

@@ -163,6 +163,24 @@ pub fn convert_path(path: &Path3D, _samples: u32) -> Result<Vec<[f64; 3]>, Strin
     }
 }
 
+/// Solid cylinder along +Z: revolve a rectangle profile `(axisPos, radius)`.
+fn cylinder_mesh(radius: f64, length: f64) -> Result<MeshData, String> {
+    if radius <= 0.0 || length <= 0.0 {
+        return Err("cylinder radius/length must be positive".into());
+    }
+    Ok(backend().revolve_mesh(&[
+        [0.0, 0.0],
+        [0.0, radius],
+        [length, radius],
+        [length, 0.0],
+    ], 360.0))
+}
+
+/// Subtract `cutter` from `base` via the active backend boolean.
+fn cut_from(base: &MeshData, cutter: &MeshData) -> Result<MeshData, String> {
+    backend().boolean(base, cutter, apro_kernel::BooleanKind::Difference)
+}
+
 /// Uniform Catmull-Rom spline point: C1-continuous, passes through p1->p2.
 fn catmull_rom_point(p0:[f64;3],p1:[f64;3],p2:[f64;3],p3:[f64;3],t:f64)->[f64;3]{
     let t2=t*t;
@@ -347,6 +365,63 @@ pub fn evaluate_solid_ops_with(
                 current_mesh = Some(transform_mesh(mesh, &[t.0, t.1, t.2], &[r.0, r.1, r.2]));
             }
 
+            SolidOp::Hole { diameter, depth, axis } => {
+                // Drill one cylinder along `axis` through the local origin.
+                let base = current_mesh.as_ref()
+                    .ok_or_else(|| "Hole applied to empty stack (add Extrude/Revolve first)".to_string())?;
+                if *diameter <= 0.0 { return Err("Hole diameter must be positive".into()); }
+                if *depth <= 0.0 { return Err("Hole depth must be positive".into()); }
+                let mut cutter = cylinder_mesh(*diameter / 2.0, *depth)?;
+                let (rx, ry, rz) = match axis {
+                    Axis::X => (0.0, -90.0, 0.0),
+                    Axis::Y => (90.0, 0.0, 0.0),
+                    Axis::Z => (0.0, 0.0, 0.0),
+                };
+                cutter = transform_mesh(&cutter, &[0.0, 0.0, 0.0], &[rx, ry, rz]);
+                current_mesh = Some(cut_from(base, &cutter)?);
+            }
+
+            SolidOp::BoltCircle { count, pitch_diameter, hole_diameter, depth } => {
+                // Ring of `count` holes around the Z axis.
+                let base = current_mesh.as_ref()
+                    .ok_or_else(|| "BoltCircle applied to empty stack".to_string())?;
+                if *count < 3 { return Err("BoltCircle count must be >= 3".into()); }
+                if *pitch_diameter <= 0.0 || *hole_diameter <= 0.0 || *depth <= 0.0 {
+                    return Err("BoltCircle diameters/depth must be positive".into());
+                }
+                let pitch_r = *pitch_diameter / 2.0;
+                let mut result = base.clone();
+                for i in 0..*count {
+                    let a = std::f64::consts::TAU * i as f64 / *count as f64;
+                    let cx = pitch_r * a.cos();
+                    let cy = pitch_r * a.sin();
+                    let mut cutter = cylinder_mesh(*hole_diameter / 2.0, *depth)?;
+                    cutter = transform_mesh(&cutter, &[cx, cy, 0.0], &[0.0, 0.0, 0.0]);
+                    result = cut_from(&result, &cutter)?;
+                }
+                current_mesh = Some(result);
+            }
+
+            SolidOp::RectPattern { x_count, y_count, spacing_x, spacing_y, hole_diameter, depth } => {
+                let base = current_mesh.as_ref()
+                    .ok_or_else(|| "RectPattern applied to empty stack".to_string())?;
+                if *x_count < 1 || *y_count < 1 { return Err("RectPattern counts must be >= 1".into()); }
+                if *hole_diameter <= 0.0 || *depth <= 0.0 {
+                    return Err("RectPattern hole diameter/depth must be positive".into());
+                }
+                let mut result = base.clone();
+                for ix in 0..*x_count {
+                    for iy in 0..*y_count {
+                        let px = (ix as f64 - (*x_count as f64 - 1.0) / 2.0) * *spacing_x;
+                        let py = (iy as f64 - (*y_count as f64 - 1.0) / 2.0) * *spacing_y;
+                        let mut cutter = cylinder_mesh(*hole_diameter / 2.0, *depth)?;
+                        cutter = transform_mesh(&cutter, &[px, py, 0.0], &[0.0, 0.0, 0.0]);
+                        result = cut_from(&result, &cutter)?;
+                    }
+                }
+                current_mesh = Some(result);
+            }
+
             SolidOp::Shell { .. } => {
                 return Err("shell not yet supported (Truck 0.6 limitation)".into());
             }
@@ -435,6 +510,60 @@ mod tests {
         let path = Path3D::Helix { radius: 10.0, pitch: 5.0, turns: 2.0 };
         let pts = convert_path(&path, 12).unwrap();
         assert!(pts.len() >= 16);
+    }
+
+    #[test]
+    fn test_hole_cuts_plate() {
+        let ops = vec![
+            SolidOp::Extrude {
+                profile: Profile::Rectangle { width: 60.0, height: 60.0, corner_radius: None },
+                height: 10.0, direction: None, taper: None,
+            },
+            SolidOp::Hole { diameter: 12.0, depth: 10.0, axis: Axis::Z },
+        ];
+        let mesh = evaluate_solid_ops(&ops).expect("plate with hole evaluates");
+        assert!(mesh.positions.len() > 0);
+    }
+
+    #[test]
+    fn test_hole_requires_base() {
+        let ops = vec![SolidOp::Hole { diameter: 12.0, depth: 10.0, axis: Axis::Z }];
+        let res = evaluate_solid_ops(&ops);
+        assert!(res.is_err(), "Hole on empty stack must error");
+    }
+
+    #[test]
+    fn test_bolt_circle_rings() {
+        let ops = vec![
+            SolidOp::Extrude {
+                profile: Profile::Rectangle { width: 80.0, height: 80.0, corner_radius: None },
+                height: 8.0, direction: None, taper: None,
+            },
+            SolidOp::BoltCircle { count: 6, pitch_diameter: 60.0, hole_diameter: 8.0, depth: 8.0 },
+        ];
+        let mesh = evaluate_solid_ops(&ops).expect("bolt circle evaluates");
+        assert!(mesh.positions.len() > 0);
+        let err = evaluate_solid_ops(&vec![
+            SolidOp::Extrude {
+                profile: Profile::Rectangle { width: 80.0, height: 80.0, corner_radius: None },
+                height: 8.0, direction: None, taper: None,
+            },
+            SolidOp::BoltCircle { count: 2, pitch_diameter: 60.0, hole_diameter: 8.0, depth: 8.0 },
+        ]);
+        assert!(err.is_err(), "count < 3 must error");
+    }
+
+    #[test]
+    fn test_rect_pattern_lightening() {
+        let ops = vec![
+            SolidOp::Extrude {
+                profile: Profile::Rectangle { width: 100.0, height: 100.0, corner_radius: None },
+                height: 6.0, direction: None, taper: None,
+            },
+            SolidOp::RectPattern { x_count: 4, y_count: 4, spacing_x: 20.0, spacing_y: 20.0, hole_diameter: 6.0, depth: 6.0 },
+        ];
+        let mesh = evaluate_solid_ops(&ops).expect("rectangle pattern evaluates");
+        assert!(mesh.positions.len() > 0);
     }
 
     #[test]
