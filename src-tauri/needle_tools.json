@@ -1,0 +1,53 @@
+[
+  {
+    "name": "apply_patch_vehicle",
+    "description": "Apply a single structured Patch to the current RON design document. Use for ANY change: set a component property, add/remove a component, reorder components, or create/edit an equation parameter. component_name must be an existing component. key selects which field; only use keys listed in the enum.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "component_name": {"type": "string", "description": "Exact component name from the document, e.g. 'Nose' or 'Body'."},
+        "operation": {
+          "type": "string",
+          "enum": ["SetProperty", "SetParameter", "AddComponent", "RemoveComponent", "ReorderComponents"],
+          "description": "Which Patch kind. SetProperty edits one field of one component. SetParameter creates/edits a document-level equation parameter."
+        },
+        "key": {
+          "type": "string",
+          "enum": ["length", "base_radius", "radius", "wall", "thickness", "chamber_radius", "throat_radius", "expansion_ratio", "percent_bell", "count", "pitch_diameter", "hole_diameter", "spacing_x", "spacing_y", "diameter", "depth", "color", "material", "profile", "cylindrical_length", "root_chord", "tip_chord", "span", "sweep", "pos_x", "pos_y", "pos_z", "rot_x_deg", "visible"],
+          "description": "Which property to change. Set to property name directly."
+        },
+        "value": {"type": "string", "description": "New value as a string: a number ('300.0'), a color ('red'/'#ff8800'), a material ('Al-6061-T6'), a bool ('true'), or an equation when key is a parameter name. Use trailing .0 for floats."}
+      },
+      "required": ["component_name", "operation", "key", "value"]
+    }
+  },
+  {
+    "name": "describe_vehicle",
+    "description": "Read the current design as an inventory of components and their properties. Call before deciding what to change.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "describe_parameters",
+    "description": "Read the document-level Parameters block: each parameter name, its literal or equation value, and its computed value.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "library_list",
+    "description": "List saved library components (names, kinds, dimensions). Useful to reuse a standard part or insert one.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string", "description": "Optional search term to filter by name/tag. Empty to list all."}
+      },
+      "required": []
+    }
+  }
+]

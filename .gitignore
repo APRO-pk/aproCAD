@@ -15,3 +15,11 @@ desktop.ini
 
 # Local env / secrets
 .env
+
+# Needle fine-tune artifacts (regenerate; do not commit)
+
+checkpoints/
+my_needle.cact
+train.log
+train.err
+

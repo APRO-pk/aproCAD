@@ -283,3 +283,29 @@ Open questions to answer in the spike:
 - Does the engine need VC++ redist / specific CPU features? (AVX2? it's CPU
   quantized 2-bit — likely fine, verify instruction-set requirements.)
 - How long does warm startup take, and can we keep it resident?
+
+---
+
+## FINE-TUNE PIPELINE RESULTS (Phase 0.5)
+
+The pipeline is fully reproducible and ran on this machine. The tool schema
+(`src-tauri/needle_tools.json`), a 348-example schema-aligned corpus
+(`needle_train.jsonl`), and the regenerator (`gen_needle_train.py`) are
+committed. `needle finetune` + `needle build` produce a 13.1 MB
+`my_needle.cact` loaded by `needle.Needle(weights=...)` in-process.
+
+**Capability verdict (honest):** the 45M base model overfits and does not
+generalize free CAD intent to our exact Patch args. Schema-aligned training
+fixed the earlier train/serve mismatch and makes `describe_*` reads work, but
+free-intent arg mapping (SetProperty vs SetParameter, color vs wall) stays
+wrong after training — zero train loss plus wrong generalization is
+memorization. Critical: tuned weights report `confidence: None` (head not
+tuned), so a tuned model loses the confidence gate and must be trusted via
+whitelist + our existing validation instead.
+
+**Recommended:** (1) scale data the documented way — `needle generate-data
+--tools src-tauri/needle_tools.json --num-samples 2000` (needs
+OPENROUTER_API_KEY) — thousands of diverse examples is a 45M model's real
+lever; (2) OR narrow Needle to reads + safe enum'd single-field edits and
+escalate the rest; (3) keep the base model wherever we want confidence-gated
+behavior.
