@@ -309,3 +309,25 @@ OPENROUTER_API_KEY) — thousands of diverse examples is a 45M model's real
 lever; (2) OR narrow Needle to reads + safe enum'd single-field edits and
 escalate the rest; (3) keep the base model wherever we want confidence-gated
 behavior.
+
+---
+
+## SCALE-DATA RESULT (Option 1 executed — definitive negative)
+
+Ran the documented path end-to-end with **OpenAI** (`OPENROUTER_URL=https://api.openai.com/v1`, `--model gpt-4o-mini`):
+- `needle generate-data --tools src-tauri/needle_tools.json --num-samples 2000 --model gpt-4o-mini`
+  → 2000 examples (1966 unique queries), merged with the seed → `needle_train_v2.jsonl` (2348).
+- `needle finetune` (1 epoch, `--max-len 128`, batch-size 16) reached **0.0 train/val loss** (memorization);
+  `needle build` → `my_needle.cact`.
+
+**Verdict: scaling data did NOT fix generalization.** Eval on the six probe queries is byte-identical to the 348-example run:
+- `set the nose length to 300` → `operation: SetParameter` (wrong; must be SetProperty)
+- `change body wall to 2.0`, `make the nozzle throat 32`, `add a parameter body_od = 98` → no call
+- `paint the fin set red` → `key: wall, value: red` (wrong)
+- `list the current design` → `describe_vehicle {}` (correct)
+
+Root cause: base Needle 2 (45M) cannot learn a generalizable free-intent→(operation, key, value) mapping from this data format. It memorizes training strings (loss → 0) and falls back to base priors on any novel phrasing. This is a **model-capacity ceiling**, not a data/epoch problem. Compounding: tuned weights report `confidence: None`, so the safety gate is lost.
+
+**Recommendation (revised):** do NOT use Needle as a high-confidence executor for CAD Patch args. Two viable uses remain:
+- **Narrow role:** ship Needle Mode only for what it reliably does — `describe_*` / `library_list` reads; feed anything else to the (already strong) API-LLM agent. Treat Needle as a cheap on-device introspection layer, never a mutator.
+- **Skip Needle:** the existing two-tier API agent already does all editing well. If a local step is required, a much larger on-device model (Cactus with a multi-B model such as gemma/lfm) would be needed to clear this bar — a future pivot, not this 45M model.

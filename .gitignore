@@ -23,3 +23,12 @@ my_needle.cact
 train.log
 train.err
 
+
+# Needle raw generated data + training logs (regenerable, keep repo lean)
+generated_data.jsonl
+needle_train_v2.jsonl
+ft.log
+ft.err
+ft2.log
+ft2.err
+run_ft.py
