@@ -32,3 +32,11 @@ ft.err
 ft2.log
 ft2.err
 run_ft.py
+
+narrow_generated.jsonl
+narrow_train.jsonl
+seed_narrow.jsonl
+ftn.log
+ftn.err
+gen_seed_narrow.py
+run_ftn.py
