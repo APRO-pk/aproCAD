@@ -16,27 +16,33 @@ desktop.ini
 # Local env / secrets
 .env
 
-# Needle fine-tune artifacts (regenerate; do not commit)
+# Needle fine-tune artifacts (regenerate; do not commit) — root-level only
+/checkpoints/
+/my_needle.cact
+/train.log
+/train.err
 
-checkpoints/
-my_needle.cact
-train.log
-train.err
+# Needle raw generated data + training logs at repo root (regenerable).
+# NOTE: root-anchored ("/") so the self-contained needle-training/ bundle,
+# which ships its own copies of the data, is still tracked.
+/generated_data.jsonl
+/needle_train_v2.jsonl
+/narrow_generated.jsonl
+/narrow_train.jsonl
+/seed_narrow.jsonl
+/ft.log
+/ft.err
+/ft2.log
+/ft2.err
+/ftn.log
+/ftn.err
+/run_ft.py
+/run_ftn.py
+/gen_seed_narrow.py
+/ng.log
+/ng.err
 
+# Python caches
+__pycache__/
+*.pyc
 
-# Needle raw generated data + training logs (regenerable, keep repo lean)
-generated_data.jsonl
-needle_train_v2.jsonl
-ft.log
-ft.err
-ft2.log
-ft2.err
-run_ft.py
-
-narrow_generated.jsonl
-narrow_train.jsonl
-seed_narrow.jsonl
-ftn.log
-ftn.err
-gen_seed_narrow.py
-run_ftn.py

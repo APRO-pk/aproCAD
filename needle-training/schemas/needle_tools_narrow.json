@@ -1,0 +1,59 @@
+[
+  {
+    "name": "set_property",
+    "description": "Set one property of one component.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "component_name": {"type": "string", "description": "Component name."},
+        "key": {"type": "string", "enum": ["length", "radius", "wall", "color", "material", "visible"]},
+        "value": {"type": "string", "description": "New value as string."}
+      },
+      "required": ["component_name", "key", "value"]
+    }
+  },
+  {
+    "name": "set_throat",
+    "description": "Set a nozzle throat dimension.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "component_name": {"type": "string", "description": "Nozzle component name."},
+        "value": {"type": "string", "description": "Throat radius in mm."}
+      },
+      "required": ["component_name", "value"]
+    }
+  },
+  {
+    "name": "set_circle",
+    "description": "Set a bolt circle on a component.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "component_name": {"type": "string"},
+        "count": {"type": "string", "description": "Number of holes."},
+        "pitch_diameter": {"type": "string", "description": "Bolt circle diameter."},
+        "hole_diameter": {"type": "string", "description": "Hole diameter."},
+        "depth": {"type": "string", "description": "Hole depth."}
+      },
+      "required": ["component_name", "count", "pitch_diameter", "hole_diameter", "depth"]
+    }
+  },
+  {
+    "name": "add_parameter",
+    "description": "Add or update a document parameter.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string", "description": "Parameter name."},
+        "value": {"type": "string", "description": "Value or equation."}
+      },
+      "required": ["name", "value"]
+    }
+  },
+  {
+    "name": "describe_vehicle",
+    "description": "Read the current design inventory.",
+    "parameters": {"type": "object", "properties": {}, "required": []}
+  }
+]

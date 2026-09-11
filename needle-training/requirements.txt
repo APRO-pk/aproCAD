@@ -1,0 +1,9 @@
+# Python deps for the Needle training bundle.
+#
+# CPU install:
+cactus-needle==2.0.10
+#
+# GPU (NVIDIA / CUDA) — install cactus-needle with the gpu extra and the CUDA
+# build of JAX so `needle finetune` trains on the GPU. See README "GPU setup".
+#   pip install "cactus-needle[gpu]"
+#   pip install "jax[cuda12]"

@@ -1,0 +1,257 @@
+# Needle Training Bundle — APRO CAD
+
+Self-contained kit to fine-tune the **Needle 2** on-device tool-calling model on
+our CAD tool vocabulary, so the app can run small edits locally/offline while the
+API LLM handles planning and hard cases.
+
+Copy this whole `needle-training/` folder to any machine and follow the steps below.
+Nothing here contains secrets — you supply your own API key via an env var.
+
+---
+
+## 0. TL;DR (the fast path)
+
+```bash
+# 1. environment (use a venv)
+python -m venv .venv && . .venv/Scripts/activate      # Windows
+pip install -r requirements.txt
+
+# 2. train (GPU box) — 4 epochs on the prepared narrow corpus
+python scripts/finetune.py --data data/narrow_train.jsonl --epochs 4 --batch-size 32
+
+# 3. export the model
+python scripts/build_cact.py --out my_needle.cact
+
+# 4. verify
+python scripts/evaluate.py --weights my_needle.cact
+#   expect: "8/8 probes correct"
+```
+
+If step 4 prints fewer than 8/8, read **Troubleshooting** — almost always the
+`--max-len` (tools truncated) or too few epochs.
+
+---
+
+## 1. What Needle is and why the details matter
+
+- **Needle 2** is a 45M-parameter, ~14 MB, CPU-capable model for **tool calling**:
+  text in → one JSON tool call out, constrained by a byte-level grammar compiled
+  from your tool schemas. Apache-2.0.
+- It runs with a **~256-token sliding attention window** with the tools "pinned as
+  KV sinks". **This is the single most important constraint** (see §6).
+- It reports a `confidence` score — but **fine-tuned weights report `confidence:
+  None`** (the confidence head is not trained). A tuned model must therefore be
+  trusted via **validation of the emitted call**, not confidence.
+- Intended usage: **a few tiny tools**, each with a small, choice-constrained
+  argument set — not one giant tool with a 29-value enum.
+
+---
+
+## 2. Prerequisites
+
+- Python 3.10–3.14 (3.14 tested).
+- ~4 GB disk for the base checkpoint + engine; the base auto-downloads on first use.
+- For GPU training (NVIDIA): a CUDA-capable driver.
+
+### CPU-only install
+```bash
+pip install -r requirements.txt      # installs cactus-needle (pulls JAX CPU)
+```
+CPU training works but is **slow** (a 1-epoch run over ~1.5k examples can take
+30–60+ min and may OOM on low-RAM machines). Use a GPU box for real runs.
+
+### GPU setup (NVIDIA / CUDA) — recommended
+```bash
+pip install "cactus-needle[gpu]"
+pip install "jax[cuda12]"            # CUDA build of JAX
+# verify JAX sees the GPU:
+python -c "import jax; print(jax.devices())"
+#   -> [CudaDevice(id=0)]  (or GpuDevice)
+```
+If `jax.devices()` shows only CPU, JAX/CUDA isn't wired up yet; fix that first —
+`needle finetune` uses JAX under the hood.
+
+---
+
+## 3. Layout
+
+```
+needle-training/
+├─ README.md                 <- this file
+├─ requirements.txt
+├─ docs/
+│  ├─ NEEDLE_MODE.md         <- architecture: two-tier design, integration, roadmap
+│  └─ NEEDLE_DIAGNOSIS.md    <- the measured root-cause analysis (read this!)
+├─ schemas/
+│  ├─ needle_tools_narrow.json  <- RECOMMENDED serving schema (5 small tools, ~389 tokens)
+│  └─ needle_tools.json         <- legacy big schema (do NOT train/serve this; exceeds the window)
+├─ data/
+│  ├─ narrow_train.jsonl     <- merged training corpus (1560 examples) — USE THIS
+│  ├─ seed_narrow.jsonl      <- hand-authored seed (60) for the narrow tools
+│  ├─ narrow_generated.jsonl <- 1500 API-generated examples (narrow schema)
+│  ├─ needle_train.jsonl     <- early seed corpus (legacy big schema)
+│  └─ needle_train_v2.jsonl  <- early merged corpus (legacy big schema)
+├─ scripts/
+│  ├─ generate_data.py       <- (re)generate data via OpenAI/OpenRouter
+│  ├─ finetune.py            <- train LoRA (GPU-aware)
+│  ├─ build_cact.py          <- merge adapter + export .cact
+│  ├─ evaluate.py            <- probe evaluation
+│  ├─ gen_seed_narrow.py     <- regenerate the narrow seed corpus
+│  └─ gen_needle_train.py    <- regenerate the legacy seed corpus
+└─ integration/
+   ├─ needle_worker.py       <- JSON-lines sidecar used by the desktop app
+   └─ needle.rs              <- the Rust Tauri command that drives the sidecar
+```
+
+---
+
+## 4. The tool schemas (what the model can call)
+
+`schemas/needle_tools_narrow.json` is the one to use. Design rules (learned the hard way):
+
+- **≤ 5 tools.** Above 5, Needle's built-in retrieval shows only the top-5 per turn;
+  an unselected tool is unreachable.
+- **Each tool < ~100 tokens.** Keep descriptions short.
+- **Constrain arguments** with small `enum`s (e.g. `key: ["length","radius","wall","color","material","visible"]`).
+  The grammar then only allows valid values, which is exactly where a tiny model wins.
+- **One tool = one narrow job.** Split operations into separate tools rather than
+  one tool with an `operation` enum + giant `key` enum.
+
+The narrow set:
+| Tool | Args |
+|---|---|
+| `set_property` | `component_name`, `key` (6 choices), `value` |
+| `set_throat` | `component_name`, `value` |
+| `set_circle` | `component_name`, `count`, `pitch_diameter`, `hole_diameter`, `depth` |
+| `add_parameter` | `name`, `value` |
+| `describe_vehicle` | (none) |
+
+> ⚠️ `schemas/needle_tools.json` (the old 4-tool / 633-token schema) is kept only
+> for reference. Its `apply_patch_vehicle` alone is ~466 tokens and **cannot fit
+> Needle's window** — training or serving it produces garbage. That was the original bug.
+
+---
+
+## 5. Data format
+
+One JSON object per line (`data/narrow_train.jsonl`):
+```json
+{"query":"paint the nose red","tools":[…full schema array…],"answers":[{"name":"set_property","arguments":{"component_name":"Nose","key":"color","value":"red"}}],"reasoning":"'red' -> color"}
+```
+- `tools`: the exact schema array you will serve (must match `schemas/needle_tools_narrow.json`).
+- `answers`: the expected call(s); an off-topic example uses `"answers": []`.
+- `reasoning`: optional short derivation.
+
+**Regenerate / expand data** (needs an OpenAI-compatible key):
+```bash
+# PowerShell
+$env:OPENROUTER_API_KEY="sk-..."          # works for OpenAI too
+python scripts/generate_data.py --tools schemas/needle_tools_narrow.json \
+    --num-samples 1500 --model gpt-4o-mini --out data/narrow_generated.jsonl
+```
+`OPENROUTER_URL` defaults to OpenAI (`https://api.openai.com/v1/chat/completions`).
+
+To add hand-authored examples, edit `scripts/gen_seed_narrow.py` and run it, then
+concatenate `seed_narrow.jsonl` + generated data into a new `*_train.jsonl`.
+
+---
+
+## 6. THE CRITICAL SETTING: `--max-len` (do not skip)
+
+`needle finetune` builds each training prompt as
+`system + <tools>{schema}</tools> + query` and then **truncates to `--max-len`**.
+If `--max-len` is smaller than the tool schema block, the model **never sees the
+tools** — it memorizes a truncated prompt, loss collapses to `0.0000` instantly,
+and evaluation is nonsense.
+
+- Narrow schema ≈ **389 tokens** → use **`--max-len 512`** (or higher).
+- Rule of thumb: `max-len ≥ tokens(tools) + tokens(query+answer) + slack`.
+- **Red flag:** if the first reported loss is `0.0000`, you truncated the tools.
+  A healthy run starts around **~2.0** and descends.
+
+Measure your schema's token cost any time:
+```bash
+python -c "import json;from needle.model.tokenizer import get_tokenizer as g;t=g();d=json.load(open('schemas/needle_tools_narrow.json'));print('tokens:',len(t.encode(json.dumps(d,separators=(',',':')))))"
+```
+
+---
+
+## 7. Step-by-step training
+
+```bash
+# (optional) fresh venv + deps
+python -m venv .venv && . .venv/Scripts/activate
+pip install -r requirements.txt
+
+# 1) TRAIN  (GPU: batch 32-64; CPU: batch 8-16, expect slow)
+python scripts/finetune.py --data data/narrow_train.jsonl \
+    --epochs 4 --max-len 512 --batch-size 32
+
+#    watch the log: loss should start ~2.0 and fall. The adapter lands at
+#    checkpoints/needle_lora.pkl. The base checkpoint auto-downloads on first run.
+
+# 2) EXPORT
+python scripts/build_cact.py --out my_needle.cact
+#    -> my_needle.cact (~14 MB). To push quality/size, add --bits 2.
+
+# 3) VERIFY
+python scripts/evaluate.py --weights my_needle.cact
+#    -> target: 8/8 probes correct.
+```
+
+Expected GPU time: a few minutes for 1560 examples × 4 epochs. CPU: tens of minutes+.
+
+---
+
+## 8. Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| First loss is `0.0000`; eval garbage | **Tools truncated.** Raise `--max-len` (≥512 for narrow). See §6. |
+| `RESOURCE_EXHAUSTED / Out of memory` | Lower `--batch-size` (8) and/or `--max-len` (but not below the tool block). Prefer GPU. |
+| `set OPENROUTER_API_KEY to generate data` | Export the key before `generate_data.py`. |
+| Every call returns `respond` / no call | Too few epochs or truncated tools; also ensure `tools` in the data exactly equals the serving schema. |
+| `confidence: None` on tuned model | Expected. Gate the tuned model by **validation**, not confidence. |
+| GPU not used | `pip install "jax[cuda12]"`; check `python -c "import jax; print(jax.devices())"`. |
+| `needle` CLI not found | `pip install cactus-needle`; on Windows it may be at `%APPDATA%\Python\Python3xx\Scripts\needle.exe` — set `NEEDLE_EXE` to it. |
+
+---
+
+## 9. Integrating the trained model into the app
+
+The desktop app already has the runtime plumbing (built and committed):
+
+- `integration/needle_worker.py` — a warm sidecar that loads a `Needle` agent and
+  answers `{id, query, tools}` requests over stdin/stdout (one JSON per line).
+- `integration/needle.rs` — the Tauri command (`needle_run`) that spawns/keeps the
+  worker and performs one `complete()` turn. It returns the model's JSON
+  (`function_calls`, `confidence`, etc.) for the app to execute/validate.
+
+To wire a trained model in the app:
+1. Copy `my_needle.cact` next to the app resources.
+2. Point the worker at it: set `weights="…/my_needle.cact"` when constructing the
+   `Needle` agent in `needle_worker.py` (or pass a path env var).
+3. Add the **Settings → AI generation: In-Line | Needle** toggle (not yet built).
+4. In Needle mode: the API LLM produces a task script; the app runs each step via
+   `needle_run`, **executes the returned call only after our validator accepts it**,
+   and escalates to the API LLM otherwise.
+
+> The **runtime to adopt later** is the native **Cactus** engine (`bindings/rust`,
+> C API with built-in tool calling + confidence + cloud handoff). It removes the
+> Python/JAX dependency entirely. See `docs/NEEDLE_MODE.md` for that roadmap.
+
+---
+
+## 10. Status / what was already established (this machine)
+
+- Pipeline verified end-to-end: install → generate-data (OpenAI) → finetune → build
+  → load `.cact` in-process, offline.
+- Root cause of the earlier failures **measured and documented** in
+  `docs/NEEDLE_DIAGNOSIS.md`: our old schema (633 tokens) exceeded Needle's window
+  and `--max-len 128` truncated the tools during training.
+- Base model + narrow schema still fails the probes → **a real fine-tune is required**
+  (which is what this bundle is for). Training was started here and loss was
+  descending correctly once `--max-len 512` was used, but this CPU box was too slow
+  to finish — hence this bundle for the GPU PC.
+
+**Next action on the GPU PC:** §7, then report `python scripts/evaluate.py --weights my_needle.cact`.
