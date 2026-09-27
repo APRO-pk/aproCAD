@@ -100,6 +100,25 @@ pub fn validate_component(comp: &Component) -> Vec<Issue> {
                 }
             }
         }
+        ComponentKind::Sketch(s) => {
+            if s.entities.is_empty() {
+                issues.push(Issue { severity: IssueSeverity::Warning, message: "Sketch has no entities".into(), component: Some(comp.name.clone()) });
+            }
+            for (i, e) in s.entities.iter().enumerate() {
+                match e {
+                    SketchEntity::Circle { radius, .. } if *radius <= 0.0 => {
+                        issues.push(Issue { severity: IssueSeverity::Error, message: format!("Sketch circle #{} radius must be positive", i), component: Some(comp.name.clone()) });
+                    }
+                    SketchEntity::Arc { radius, .. } if *radius <= 0.0 => {
+                        issues.push(Issue { severity: IssueSeverity::Error, message: format!("Sketch arc #{} radius must be positive", i), component: Some(comp.name.clone()) });
+                    }
+                    SketchEntity::Spline { points, .. } if points.len() < 2 => {
+                        issues.push(Issue { severity: IssueSeverity::Error, message: format!("Sketch spline #{} needs at least 2 points", i), component: Some(comp.name.clone()) });
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
     issues
 }

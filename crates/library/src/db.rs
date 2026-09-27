@@ -428,6 +428,7 @@ fn parse_kind(s: &str) -> EntryKind {
         "FinSet" => EntryKind::FinSet,
         "Transition" => EntryKind::Transition,
         "Solid" => EntryKind::Solid,
+        "Sketch" => EntryKind::Sketch,
         _ => EntryKind::Assembly,
     }
 }

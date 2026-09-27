@@ -40,8 +40,9 @@
       <span id="kind-badge" class="kind-badge"></span>
       <div class="tb-divider"></div>
       <select id="preset-select">
+        <option value="" selected>Presets…</option>
         <optgroup label="General CAD">
-          <option value="solid-bracket" selected>Bracket</option>
+          <option value="solid-bracket">Bracket</option>
           <option value="lre-demo">Liquid Rocket Engine</option>
           <option value="full-rocket">Full Rocket (Shorthand)</option>
           <option value="solid-extrude">Extrude</option>
@@ -293,23 +294,12 @@
             </div>
           </div>
           <div id="editor-wrapper">
-            <textarea id="editor" spellcheck="false">Component(
-    name: "Bracket-1",
-    kind: Solid([
-        Extrude(
-            profile: Points([(0.0, 0.0), (80.0, 0.0), (80.0, 60.0), (40.0, 60.0), (40.0, 20.0), (0.0, 20.0)]),
-            height: 10.0,
-            direction: None,
-            taper: None,
-        ),
-        Extrude(
-            profile: Points([(70.0, 10.0), (75.0, 10.0), (75.0, 15.0), (70.0, 15.0)]),
-            height: 10.0,
-            direction: None,
-            taper: None,
-        ),
-    ]),
-)</textarea>
+            <textarea id="editor" spellcheck="false" placeholder="Vehicle(
+    name: &quot;New Design&quot;,
+    units: Millimeters,
+    components: [],
+)
+— or pick a preset above. You can also draw a sketch from the Sketch tab."></textarea>
           </div>
         </div>
 
@@ -510,6 +500,14 @@
           <button id="ai-settings-close">✕</button>
         </div>
         <div class="ai-settings-body">
+          <label>Provider</label>
+          <select id="ai-provider-select">
+            <option value="custom" selected>Custom / OpenAI-compatible</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+          </select>
+          <div class="needle-hint" id="ai-provider-hint">Any OpenAI-compatible endpoint. Pick a provider to prefill the endpoint and model list.</div>
           <label>API Key</label>
           <input type="password" id="ai-api-key" placeholder="sk-..." />
           <label>Model <span id="ai-constraint-badge" class="constraint-badge" style="display:none;" title="Endpoint rejected schema-constrained output; quality may be lower">unconstrained</span></label>
@@ -519,9 +517,28 @@
             <option value="gpt-4-turbo">GPT-4 Turbo</option>
             <option value="o3-mini">o3 Mini</option>
             <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
+            <option value="deepseek-flash">deepseek-flash</option>
+            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
           </select>
           <label>API Endpoint</label>
           <input type="text" id="ai-endpoint" value="https://api.openai.com/v1/chat/completions" />
+          <label>Generation</label>
+          <select id="ai-generation">
+            <option value="inline" selected>In-Line (API plans &amp; executes)</option>
+            <option value="needle">Needle (local model executes)</option>
+          </select>
+          <label>Needle Model (.cact) <span id="needle-status" class="constraint-badge" style="display:none;"></span></label>
+          <div class="needle-row">
+            <input type="text" id="needle-weights" placeholder="path to my_needle.cact" />
+            <button type="button" id="needle-weights-browse" class="tb-btn">Browse…</button>
+          </div>
+          <div class="needle-hint">Needle runs small edits locally (~300&nbsp;ms). The API model still plans; any call it can't validate is escalated back to the API.</div>
+          <label class="needle-check"><input type="checkbox" id="needle-steps" checked /> AI breaks work into Needle-sized micro-steps</label>
+          <div class="needle-hint">When on, the planner emits one atomic change per step and tags each `needle:` (local) or `api:` (cloud), so the local model only sees commands it was trained on.</div>
+          <label class="needle-check"><input type="checkbox" id="needle-fast" checked /> Fast mode — batch all API work into one call</label>
+          <div class="needle-hint">Collapses the session to 1–3 API calls total (one plan, one batched patch for anything local can't do, one review) instead of one call per step. Greatly reduces rate-limiting.</div>
+          <label class="needle-check"><input type="checkbox" id="ai-thinking" /> DeepSeek thinking mode (slower, uses many more tokens)</label>
+          <div class="needle-hint" id="ai-thinking-hint">Off by default: DeepSeek's thinking mode is on unless disabled, and can spend thousands of reasoning tokens per step — occasionally consuming the whole budget and returning empty content. Leave it off unless you want the extra deliberation. Ignored by other providers.</div>
         </div>
         <div id="ai-settings-footer">
           <button id="ai-settings-save" class="tb-btn primary">Save</button>

@@ -40,6 +40,12 @@
       chatTab?.click();
     },
     'library': () => { window.__apro?.openLibrary?.(); },
+    // Sketch tools: sketcher.js owns the interaction; these only enter a mode.
+    'sketch-line': () => window.__sketcher?.begin('line'),
+    'sketch-rect': () => window.__sketcher?.begin('rect'),
+    'sketch-circle': () => window.__sketcher?.begin('circle'),
+    'sketch-arc': () => window.__sketcher?.begin('arc'),
+    'sketch-spline': () => window.__sketcher?.begin('spline'),
     'tool-cursor': () => { window.__apro?.setGizmoMode?.('cursor'); },
     'tool-move': () => { window.__apro?.setGizmoMode?.('translate'); },
     'tool-scale': () => { window.__apro?.setGizmoMode?.('scale'); },
@@ -102,6 +108,25 @@
   }
   function syncToggleButton(tool, on) {
     setBtnActive(tool, on);
+  }
+
+  // ---------- Sketch mode ----------
+  const SKETCH_TOOLS = ['sketch-line', 'sketch-rect', 'sketch-circle', 'sketch-arc', 'sketch-spline'];
+
+  // Highlight the active sketch tool; clear every sketch button when the mode
+  // ends (sketcher.js emits ux:sketch-tool on every tool/plane transition).
+  function syncSketchButtons(tool, active) {
+    SKETCH_TOOLS.forEach((t) => setBtnActive(t, !!active && t === 'sketch-' + tool));
+  }
+
+  function initSketchRibbon() {
+    window.addEventListener('ux:sketch-tool', (e) => {
+      const d = (e && e.detail) || {};
+      syncSketchButtons(d.tool, d.active);
+    });
+    // The sketcher may already be active when this module loads late.
+    const active = window.__sketcher?.isActive?.();
+    if (active) syncSketchButtons(window.__sketcher.activeTool?.(), true);
   }
 
   function initRibbon() {
@@ -309,7 +334,7 @@
     comps.forEach((c, i) => {
       const icons = {
         NoseCone: '△', BodyTube: '▯', Transition: '◮', Tank: '●',
-        Nozzle: '▽', FinSet: '▲', Solid: '▧',
+        Nozzle: '▽', FinSet: '▲', Solid: '▧', Sketch: '✎',
       };
       const node = document.createElement('div');
       node.className = 'tree-node';
@@ -565,6 +590,7 @@
     initShortcuts();
     initSelChip();
     initSidebar();
+    initSketchRibbon();
     syncViewModeButtons(); // shaded is the default mode
     setBtnActive('view-grid', true);
     setBtnActive('view-axes', true);

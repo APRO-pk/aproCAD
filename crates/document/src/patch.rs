@@ -167,6 +167,19 @@ fn set_property_in_kind(kind: &mut ComponentKind, key: &str, value: &str) -> Res
                 _ => Err("Editing of this op not supported via property table".into()),
             }
         }
+        ComponentKind::Sketch(s) => match key {
+            "plane" => {
+                s.plane = match value.trim() {
+                    "XY" | "xy" => SketchPlane::XY,
+                    "XZ" | "xz" => SketchPlane::XZ,
+                    "YZ" | "yz" => SketchPlane::YZ,
+                    other => return Err(format!("unknown sketch plane: {}", other)),
+                };
+                Ok(())
+            }
+            "offset" => { s.offset = pf(value)?; Ok(()) }
+            _ => Err("Sketch entities are edited in the RON editor, not the property table".into()),
+        },
     }
 }
 

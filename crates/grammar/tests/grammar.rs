@@ -252,7 +252,8 @@ fn test_grammar_covers_all_variants() {
 fn test_schema_contains_all_key_types() {
     let schema = schema_for_vehicle();
     let defs = schema["$defs"].as_object().expect("$defs");
-    for t in ["Component", "ComponentKind", "SolidOp", "Profile", "Path3D", "NoseConeParams", "BodyTubeParams", "Transform", "Units"] {
+    for t in ["Component", "ComponentKind", "SolidOp", "Profile", "Path3D", "NoseConeParams", "BodyTubeParams", "Transform", "Units",
+              "SketchParams", "SketchEntity", "SketchPlane", "BooleanKind", "SolidRef"] {
         assert!(defs.contains_key(t), "missing definition {t}");
     }
 }

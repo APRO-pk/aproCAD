@@ -165,13 +165,19 @@ impl GrammarBuilder {
         if trimmed.is_empty() {
             return Err(GbnfError(format!("empty rule body for {name}")));
         }
-        if let Some(prev) = self.rules.insert(name.to_string(), trimmed.to_string()) {
+        if let Some(prev) = self.rules.get(name) {
+            // Two different types may own a variant with the same name (for
+            // example `Path3D::Line` vs `SketchEntity::Line`). Silently keeping
+            // one would hand the model the wrong field list, so this is a hard
+            // error: variant rule names must be namespaced by their owner.
             if prev != trimmed {
                 return Err(GbnfError(format!(
                     "rule {name} emitted twice with different bodies:\n  {prev}\n  {trimmed}"
                 )));
             }
+            return Ok(());
         }
+        self.rules.insert(name.to_string(), trimmed.to_string());
         Ok(())
     }
 
@@ -219,9 +225,16 @@ impl GrammarBuilder {
         }
 
         if let Some(one_of) = v.get("oneOf").and_then(|o| o.as_array()) {
+            // Variant rule names are namespaced by the owning type so that two
+            // enums sharing a variant name (`Path3D::Line` and
+            // `SketchEntity::Line`, whose field lists differ) cannot clobber
+            // each other.
+            let owner = ref_name
+                .or_else(|| ref_hint.map(|h| h.to_string()))
+                .unwrap_or_else(|| name.to_string());
             let mut alts = Vec::new();
             for s in one_of {
-                alts.push(self.variant_alt(s)?);
+                alts.push(self.variant_alt(s, &owner)?);
             }
             if alts.is_empty() {
                 return Err(GbnfError(format!("oneOf with no alternatives in {name}")));
@@ -308,6 +321,26 @@ impl GrammarBuilder {
                     let joined = parts.join(format!(" {WS} \",\" {WS} ").as_str());
                     self.emit(name, format!("\"(\" {WS} {joined} {WS} \")\""))
                 } else if let Some(items_v) = items {
+                    // serde writes a Rust fixed-size array (`[f64; 2]`) as a RON
+                    // *tuple*, but schemars describes it as an `items` array
+                    // with equal `minItems`/`maxItems` rather than
+                    // `prefixItems`. Emitting the repeated `[...]` form here
+                    // would hand the model a shape the parser rejects, so the
+                    // fixed length must be honoured too.
+                    let min = v.get("minItems").and_then(|m| m.as_u64());
+                    let max = v.get("maxItems").and_then(|m| m.as_u64());
+                    if let (Some(n), Some(m)) = (min, max) {
+                        if n == m && n > 0 {
+                            let mut parts = Vec::new();
+                            for i in 0..n {
+                                let r = format!("{name}-tuple{}", i);
+                                self.gen_rule(&r, items_v, None)?;
+                                parts.push(r);
+                            }
+                            let joined = parts.join(format!(" {WS} \",\" {WS} ").as_str());
+                            return self.emit(name, format!("\"(\" {WS} {joined} {WS} \")\""));
+                        }
+                    }
                     let item_name = format!("{name}-item");
                     self.gen_rule(&item_name, items_v, None)?;
                     self.emit(
@@ -333,7 +366,7 @@ impl GrammarBuilder {
     /// (`{"title": "Variant", "type": "object", "required": ["Variant"],
     ///   "properties": {"Variant": <schema>}}`), or a string-enum entry
     /// (`{"type": "string", "enum": [...]}`).
-    fn variant_alt(&mut self, s: &Value) -> GbnfResult<String> {
+    fn variant_alt(&mut self, s: &Value, owner: &str) -> GbnfResult<String> {
         let s = resolve(&self.schema, s);
         // `const` alternative (e.g. unit variant with a doc comment:
         // `{"type": "string", "const": "Noop"}`)
@@ -365,7 +398,7 @@ impl GrammarBuilder {
                     Ok(format!("\"{}\" {WS} \"(\" {WS} {params_rule} {WS} \")\"", variant_name))
                 } else {
                     // Struct variant: `Name(field: v, ...)`
-                    let inner_rule = format!("variant-{}", rule_name(variant_name));
+                    let inner_rule = format!("{}-{}", rule_name(owner), rule_name(variant_name));
                     self.gen_rule(&inner_rule, &inner, None)?;
                     Ok(format!("\"{}\" {WS} {inner_rule}", variant_name))
                 }
@@ -401,7 +434,7 @@ pub fn generate_gbnf(schema_json: &Value, root: &str) -> GbnfResult<String> {
     let mut b = GrammarBuilder::new(schema_json.clone());
     // Only *object* roots are RON named structs (e.g. `Vehicle( ... )`) and
     // need the `"Name" ws (...)` wrapper. Enum roots (e.g. `Patch`) are bare
-    // variants in RON (`SetProperty(...)`) — wrapping them would force
+    // variants in RON (`SetProperty(...)`) â€” wrapping them would force
     // invalid output like `Patch(SetProperty(...))`.
     let is_object = schema_json.get("type").and_then(|t| t.as_str()) == Some("object")
         || schema_json.get("properties").is_some();
@@ -536,4 +569,82 @@ mod tests {
             assert!(schema_json_contains(&schema, op), "solid op {op} must be in the vehicle schema");
         }
     }
+
+    #[test]
+    fn sketch_types_in_vehicle_schema() {
+        // The sketch data model must reach both AI grammar paths, otherwise the
+        // local model can never author a sketch and the cloud schema rejects it.
+        let schema = schema_for_vehicle();
+        for needle in ["Sketch", "SketchParams", "SketchEntity", "SketchPlane", "Reference"] {
+            assert!(schema_json_contains(&schema, needle), "vehicle schema must include {needle}");
+        }
+        for entity in ["Line", "Rectangle", "Circle", "Arc", "Spline"] {
+            assert!(schema_json_contains(&schema, entity), "sketch entity {entity} must be in the schema");
+        }
+    }
+
+    #[test]
+    fn sketch_component_gets_a_gbnf_rule() {
+        // `generate_gbnf` walks the schema generically; if a sketch type were
+        // skipped or unnamed it would silently vanish from the grammar.
+        let schema = schema_for_vehicle();
+        let gbnf = generate_gbnf(&schema, "Vehicle").expect("grammar generates");
+        for needle in ["\"Sketch\"", "SketchEntity-Line", "SketchEntity-Circle", "SketchEntity-Arc",
+                       "SketchEntity-Spline", "SketchEntity-Rectangle"] {
+            assert!(gbnf.contains(needle), "GBNF must mention {needle}");
+        }
+        validate_gbnf(&gbnf, "Vehicle").expect("generated grammar must be structurally valid");
+    }
+
+    #[test]
+    fn sketch_entity_variants_do_not_collide_with_path3d() {
+        // `Path3D::Line` and `SketchEntity::Line` share a variant name but not
+        // a field list (3D point vs 2D point). Rule names are namespaced by
+        // owning type, so each must get its own rule with the right arity.
+        let schema = schema_for_vehicle();
+        let gbnf = generate_gbnf(&schema, "Vehicle").expect("grammar generates");
+
+        let rule_for = |name: &str| -> String {
+            gbnf.lines()
+                .find(|l| l.starts_with(&format!("{name} ::=")))
+                .unwrap_or_else(|| panic!("missing rule {name}"))
+                .to_string()
+        };
+
+        // Both variants exist as separate rules...
+        let sketch_line = rule_for("SketchEntity-Line");
+        let path_line = rule_for("Path3D-Line");
+        assert!(sketch_line.contains("\"start\"") && sketch_line.contains("\"end\""), "{sketch_line}");
+        assert!(path_line.contains("\"start\"") && path_line.contains("\"end\""), "{path_line}");
+
+        // ...and a 2D sketch point is a two-slot tuple while a 3D sweep path
+        // point is a three-slot tuple.
+        let sketch_pt = rule_for("SketchEntity-Line-field-start");
+        assert!(sketch_pt.starts_with("SketchEntity-Line-field-start ::= \"(\""), "2D point must be a tuple: {sketch_pt}");
+        assert!(sketch_pt.contains("tuple0") && sketch_pt.contains("tuple1"), "{sketch_pt}");
+        assert!(!sketch_pt.contains("tuple2"), "2D point must not have a third slot: {sketch_pt}");
+
+        let path_pt = rule_for("Path3D-Line-field-start");
+        assert!(path_pt.contains("tuple2"), "3D point must have a third slot: {path_pt}");
+
+        validate_gbnf(&gbnf, "Vehicle").expect("grammar stays structurally valid");
+    }
+
+    #[test]
+    fn sketch_plane_identifiers_are_offered() {
+        // Sketches author `plane: XY` (a bare identifier), so the plane rule
+        // must offer the variant names rather than a quoted string enum.
+        let schema = schema_for_vehicle();
+        let gbnf = generate_gbnf(&schema, "Vehicle").expect("grammar generates");
+        let rule = gbnf
+            .lines()
+            .find(|l| {
+                l.contains("\"XY\"") && l.contains("\"XZ\"") && l.contains("\"YZ\"")
+            })
+            .unwrap_or_else(|| panic!("no grammar rule offering the XY/XZ/YZ plane alternatives"));
+        for p in ["XY", "XZ", "YZ"] {
+            assert!(rule.contains(&format!("\"{p}\"")), "plane rule must offer {p}: {rule}");
+        }
+    }
 }
+

@@ -219,22 +219,66 @@ Expected GPU time: a few minutes for 1560 examples × 4 epochs. CPU: tens of min
 
 ## 9. Integrating the trained model into the app
 
-The desktop app already has the runtime plumbing (built and committed):
+The desktop app has the full two-tier plumbing (built and committed):
 
 - `integration/needle_worker.py` — a warm sidecar that loads a `Needle` agent and
-  answers `{id, query, tools}` requests over stdin/stdout (one JSON per line).
-- `integration/needle.rs` — the Tauri command (`needle_run`) that spawns/keeps the
-  worker and performs one `complete()` turn. It returns the model's JSON
-  (`function_calls`, `confidence`, etc.) for the app to execute/validate.
+  answers `{id, query, tools, weights, reset}` requests over stdin/stdout (one JSON
+  per line). **It resets the engine before every turn** (see §11 — required).
+- `integration/needle.rs` / `src-tauri/src/needle.rs` — the Tauri command
+  (`needle_run`) that spawns/keeps the worker and performs one `complete()` turn.
+- `src-tauri/src/lib.rs` — `get_needle_schema` (serves the embedded narrow schema)
+  and `pick_file_dialog` (native `.cact` picker).
+- `src/main.js` — **Needle mode**: `callNeedle()` → `needleCallToPatch()` (maps a
+  Needle tool call onto a RON `Patch`, resolving the model's canonical
+  `Nose/Body/Nozzle/Fins` onto the real component names by kind) → the existing
+  validation gate. Any failure (no call, ungrounded/negated call, unknown
+  component, unsupported tool, patch rejected) **escalates that todo to the API**.
 
-To wire a trained model in the app:
-1. Copy `my_needle.cact` next to the app resources.
-2. Point the worker at it: set `weights="…/my_needle.cact"` when constructing the
-   `Needle` agent in `needle_worker.py` (or pass a path env var).
-3. Add the **Settings → AI generation: In-Line | Needle** toggle (not yet built).
-4. In Needle mode: the API LLM produces a task script; the app runs each step via
-   `needle_run`, **executes the returned call only after our validator accepts it**,
-   and escalates to the API LLM otherwise.
+To use a trained model in the app:
+1. **Settings → Generation → Needle**, then **Browse…** to the `.cact` file.
+2. Optionally keep **"AI breaks work into Needle-sized micro-steps"** on (default).
+3. Send a request as usual: the API LLM still plans; each simple todo runs locally
+   first (~300 ms) and hard ones go to the API.
+
+### Micro-step mode (the important optimisation)
+
+With the checkbox on, the planner is given a different contract
+(`NEEDLE_PLAN_CONTRACT` in `src/main.js`): it emits **one atomic change per todo**,
+tagged with the executor that should handle it.
+
+- `needle: set the Nose length to 450` — phrased in the exact tiny vocabulary the
+  local model was trained on; executed on-device.
+- `api: add a FinSet named Fins-2 with 4 fins, ...` — anything outside that
+  vocabulary; goes straight to the cloud, never wasting a local round trip.
+
+Measured effect on the same probe set: generic todo phrasing (`"Increase Nose
+length to 300.0"`) resolved **6/7** locally; micro-step phrasing resolved **7/7**,
+because each step is a single property and matches a trained command shape. The
+planner's routing also means unsupported work skips the local model entirely.
+
+### Fast mode — batching the API calls (rate-limit fix)
+
+The default agent loop made **~1 plan + 1 API call per todo + 3 review + 1
+optimize** calls, which trips provider rate limits almost immediately. The
+**"Fast mode"** checkbox (default on, `needleFastEnabled()` in `src/main.js`)
+replaces that with a single session (`runNeedleSession`):
+
+1. **One plan call** → micro-steps tagged `needle:`/`api:`.
+2. The local model executes every `needle:` step (no API calls at all).
+3. **One batched patch call** for everything left (`api:` steps + local misses) —
+   the model emits a single `PatchList` applied atomically. Only if that is
+   rejected does it fall back to the reliable per-step loop.
+4. **One combined review call**, and only when validation actually reports issues
+   (the 3-round review + optimize passes are folded into this).
+
+| | API calls per request |
+|---|---|
+| In-Line / non-fast | 1 + N + up to 4 |
+| Fast Needle mode | **1–3 total** |
+
+Rate-limit handling in `callAi` was also hardened: it now honours the
+`Retry-After` header and the body's `try again in Ns/ms`, falls back to
+exponential backoff with jitter, and allows up to 8 attempts.
 
 > The **runtime to adopt later** is the native **Cactus** engine (`bindings/rust`,
 > C API with built-in tool calling + confidence + cloud handoff). It removes the
@@ -255,3 +299,35 @@ To wire a trained model in the app:
   to finish — hence this bundle for the GPU PC.
 
 **Next action on the GPU PC:** §7, then report `python scripts/evaluate.py --weights my_needle.cact`.
+
+---
+
+## 11. RESULT: the CUDA-trained model (measured)
+
+The GPU-trained adapter (`needle-training-new/…/checkpoints/needle_lora.pkl`,
+rank 32, alpha 2.0) **works**. Findings, all measured on this machine:
+
+- **Training succeeded.** Loading base + adapter in **float32** and decoding
+  **greedy** (Python reference path) reproduces the training behaviour: **6/6** on
+  the core probes, with correct capitalised component names.
+- **The `.cact` engine carries decode state between `complete()` calls.** Serving
+  several queries through one warm agent without resetting bleeds a stale KV cache
+  into every later query — measured **1/8** correct. Calling `agent.reset()` (the
+  worker does this by default now) restores **6/8**. Results are then perfectly
+  reproducible run-to-run (the engine *is* greedy).
+- **Serve the exact `needle_tools_narrow.json` block.** The model memorised the
+  precise tool JSON; a terser re-description of the same 5 tools collapsed it to
+  **1/8**. Do not "improve" the schema text at serving time.
+- **Ceiling here is 6/8**, and the two misses (`"Nose"`→`"NS"`, and
+  `hide the nozzle` → wrong tool) are **introduced by the 4-bit export** — float32
+  gets both right. Only `--bits 2|4` exports exist, so this is the precision limit.
+  Treat the local model as a **fast draft executor** and gate every call by
+  validation, escalating to the API LLM on reject (the two-tier design in
+  `docs/NEEDLE_MODE.md`).
+
+Reproduce:
+```bash
+python scripts/evaluate.py --weights my_needle.cact   # add --reset (now default)
+```
+
+Warm latency measured through the sidecar: **~250–400 ms/turn** (CPU).

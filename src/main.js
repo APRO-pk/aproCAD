@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { initSyntaxEditor, getEditorRon, setEditorRon, selectSyntaxTarget, createSyntaxEditor } from './editor-syntax.js';
+import { createSketcher } from './sketcher.js';
+import { createSketchDisplay } from './sketch-display.js';
 window.__boot && window.__boot.push('main: imports ok');
 
 // ===== DOM refs =====
@@ -86,6 +88,11 @@ scene.add(meshGroup);
 let showWireframe = false;
 const wireframeGroup = new THREE.Group();
 scene.add(wireframeGroup);
+
+// Sketches are construction geometry with no mesh of their own, so they are
+// drawn separately from the evaluated solids and stay visible after the
+// drawing tool closes.
+const sketchDisplay = createSketchDisplay(THREE, scene);
 
 // ===== Camera defaults =====
 const DEFAULT_CAM_POS = new THREE.Vector3(400, 300, 500);
@@ -475,6 +482,7 @@ function applySelectionOutline() {
 
 function deselectComponent() {
   selectedComponentName = null;
+  sketchDisplay.setSelected(null);
   clearSelectionOutline();
   stopLeaderLoop();
   selectSyntaxTarget(null);
@@ -485,6 +493,8 @@ function deselectComponent() {
 
 async function selectComponent(name) {
   selectedComponentName = name;
+  // A sketch has no mesh to outline, so highlight its drawn lines instead.
+  sketchDisplay.setSelected(name);
   selectionColorHex = randomSelectionColor();
   applySelectionOutline();
   showLeaderLoop();
@@ -965,6 +975,7 @@ async function evaluate() {
   if (!stripRonComments(ron).trim()) {
     clearMeshes();
     clearSelectionOutline();
+    sketchDisplay.clear();
     showIssues([]);
     polyCount.textContent = '';
     massInfo.textContent = '';
@@ -1022,6 +1033,9 @@ async function evaluate() {
       }
       clearMeshes();
     clearSelectionOutline();
+    // Sketches produce no mesh, so they are rebuilt from the document text
+    // rather than from the evaluation payload.
+    sketchDisplay.sync(ron);
 
     if (result.mesh) {
       componentMeshes.clear();
@@ -1084,6 +1098,9 @@ async function evaluate() {
     await hideEvalProgress();
     setStatus('Error: ' + err, false);
     showIssues([{ severity: 'Error', message: String(err) }]);
+    // The document may still parse far enough to show its sketches; a sketch
+    // should not blink out just because an unrelated part failed to evaluate.
+    try { sketchDisplay.sync(ron); } catch (e) { /* display only */ }
   }
 }
 
@@ -1582,7 +1599,7 @@ const PRESETS = {
 };
 
 // ===== Properties popup (Feature Manager selection -> 3D view) =====
-const KIND_ICONS = { NoseCone: '?', BodyTube: '?', Transition: '?', Tank: '?', Nozzle: '?', FinSet: '?', Solid: '?' };
+const KIND_ICONS = { NoseCone: '?', BodyTube: '?', Transition: '?', Tank: '?', Nozzle: '?', FinSet: '?', Solid: '?', Sketch: '?' };
 
 function hexColorCss(hex) {
   return '#' + hex.toString(16).padStart(6, '0');
@@ -2006,7 +2023,7 @@ let pendingLibDeleteId = null;
 
 const LIB_KIND_ICONS = {
   NoseCone: '△', BodyTube: '▯', Transition: '◮', Tank: '●',
-  Nozzle: '▽', FinSet: '▲', Solid: '▧', Assembly: '🗂',
+  Nozzle: '▽', FinSet: '▲', Solid: '▧', Assembly: '🗂', Sketch: '✎',
 };
 
 // ===== Rotating 3D thumbnails =====
@@ -2484,7 +2501,7 @@ const LIBNEW_CONTRACT =
   '\n\n## Output contract (component designer — STRICT)\n' +
   'Emit exactly ONE `Component(...)` value and nothing else — NEVER a Vehicle wrapper, never prose, never a Patch.\n' +
   '- Component fields: name, material, color: Some("#hex") optional, visible: true, transform: (position:(x,y,z), rotation:(x,y,z)), kind.\n' +
-  '- kind is one of NoseCone(NoseConeParams(...)), BodyTube(BodyTubeParams(...)), Transition(TransitionParams(...)), Tank(TankParams(...)), Nozzle(NozzleParams(...)), FinSet(FinSetParams(...)) or Solid([SolidOp,...]).\n' +
+  '- kind is one of NoseCone(NoseConeParams(...)), BodyTube(BodyTubeParams(...)), Transition(TransitionParams(...)), Tank(TankParams(...)), Nozzle(NozzleParams(...)), FinSet(FinSetParams(...)) or Solid([SolidOp,...]). A Sketch(...) kind is construction geometry and produces no solid on its own, so never use it for a standalone library part — reference it from an Extrude instead.\n' +
   '- NEW part: design from scratch with realistic dimensions in Millimeters.\n' +
   '- IMPROVE mode: a current draft RON is provided — apply ONLY what the user asked and keep every other field identical.\n';
 
@@ -3111,6 +3128,27 @@ window.__apro.screenshotViewport = screenshotViewport;
 window.__apro.setGizmoMode = setGizmoMode;
 window.__boot && window.__boot.push('main: apro+io ready');
 
+// ===== 2D sketch tool (overlay lives in sketcher.js) =====
+// camera/controls are LIVE getters here too: the iso cycle swaps both instances
+// mid-session, so the sketcher must always ask for the active ones.
+const sketcher = createSketcher({
+  THREE,
+  canvas: renderer.domElement,
+  getCamera: () => camera,
+  getControls: () => controls,
+  scene,
+  evaluate,
+  notify: (m, k, ms) => {
+    if (typeof notify === 'function') { notify(m, k, ms); return; }
+    if (typeof showToast === 'function') { showToast(m); return; }
+    // Last resort: ux.js owns the notification stack, so go through it.
+    window.__ux?.notify?.(m, k, ms);
+    console.log('[sketch]', m);
+  },
+});
+window.__sketcher = sketcher;
+window.__boot && window.__boot.push('main: sketcher ready');
+
 // ===== Selection + property editing wiring =====
 vpPropsClose.addEventListener('click', deselectComponent);
 
@@ -3144,10 +3182,13 @@ document.addEventListener('keydown', (e) => {
   };
 
   renderer.domElement.addEventListener('pointerdown', e => {
+    // Sketch mode owns the canvas: a draw-drag must never mutate selection.
+    if (window.__sketcher && window.__sketcher.isActive()) return;
     if (e.button !== 0) return;
     downX = e.clientX; downY = e.clientY; downT = performance.now();
   });
   renderer.domElement.addEventListener('pointerup', e => {
+    if (window.__sketcher && window.__sketcher.isActive()) return;
     if (e.button !== 0) return;
     // A gizmo drag must never fall through to selection.
     if (suppressClickSelect || (transformGizmo && transformGizmo.dragging)) return;
@@ -3609,6 +3650,8 @@ document.getElementById('preset-select').addEventListener('change', (e) => {
     editor.value = ron;
     evaluate();
   }
+  // Show the placeholder again so the control reads as an action, not state.
+  e.target.value = '';
 });
 
 // Debounce auto-evaluate
@@ -3631,6 +3674,15 @@ const aiSettingsSave = document.getElementById('ai-settings-save');
 const aiApiKeyInput = document.getElementById('ai-api-key');
 const aiModelSelect = document.getElementById('ai-model-select');
 const aiEndpointInput = document.getElementById('ai-endpoint');
+const aiGenerationSelect = document.getElementById('ai-generation');
+const needleWeightsInput = document.getElementById('needle-weights');
+const needleWeightsBrowse = document.getElementById('needle-weights-browse');
+const needleStatusEl = document.getElementById('needle-status');
+const needleStepsCheck = document.getElementById('needle-steps');
+const needleFastCheck = document.getElementById('needle-fast');
+// DeepSeek only: thinking mode is off by default here because it is on by
+// default at the API and can burn the entire token budget on reasoning.
+const aiThinkingToggle = document.getElementById('ai-thinking');
 
 // AI / Chat
 const aiModeBtn = document.getElementById('ai-mode-btn');
@@ -4144,6 +4196,118 @@ document.querySelectorAll('#editor-tabs .tab-btn').forEach(btn => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
 });
 
+// ===== AI providers =====
+// Every entry must speak the OpenAI chat-completions shape, because that is
+// what callAi() posts. `constraint` records how the provider can be pinned to
+// structured output:
+//   'json_schema' — a named JSON schema (OpenAI and friends). The model emits
+//                   JSON, which the backend converts to RON.
+//   'ron'         — no schema knob, so the model is asked for RON directly.
+//                   Every parser in this file already accepts RON, which is
+//                   what the output contracts are written in anyway; it also
+//                   avoids pushing a ~20 KB JSON schema into every request the
+//                   way a json_object-only provider would need.
+//   'none'        — forward the prompt unconstrained.
+// A rejected schema is caught and retried unconstrained, so a wrong guess here
+// costs one round trip rather than a failure.
+const PROVIDERS = {
+  custom: {
+    label: 'Custom / OpenAI-compatible',
+    endpoint: '',
+    hint: 'Any OpenAI-compatible endpoint. Pick a provider to prefill the endpoint and model list.',
+    constraint: 'json_schema',
+    models: [],
+  },
+  deepseek: {
+    label: 'DeepSeek',
+    endpoint: 'https://api.deepseek.com/chat/completions',
+    hint: 'DeepSeek exposes an OpenAI-compatible API. It has no named JSON-schema mode, so the AI is asked for RON directly (which the app parses natively).',
+    constraint: 'ron',
+    models: [
+      ['deepseek-flash', 'deepseek-flash (fast, cheapest)'],
+      ['deepseek-v4-pro', 'deepseek-v4-pro (strongest)'],
+    ],
+  },
+  openai: {
+    label: 'OpenAI',
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    hint: 'Schema-constrained output is fully supported.',
+    constraint: 'json_schema',
+    models: [
+      ['gpt-4o', 'GPT-4o'],
+      ['gpt-4o-mini', 'GPT-4o Mini'],
+      ['gpt-4-turbo', 'GPT-4 Turbo'],
+      ['o3-mini', 'o3 Mini'],
+    ],
+  },
+  anthropic: {
+    label: 'Anthropic',
+    endpoint: 'https://api.anthropic.com/v1/chat/completions',
+    hint: 'Requires an Anthropic OpenAI-compatibility endpoint; no named JSON schemas, so RON is requested directly.',
+    constraint: 'ron',
+    models: [
+      ['claude-sonnet-4-20250514', 'Claude Sonnet 4'],
+    ],
+  },
+};
+
+function providerInfo(name) {
+  return PROVIDERS[name] || PROVIDERS.custom;
+}
+
+// Which provider does the configured endpoint actually belong to? Lets a saved
+// or hand-typed endpoint get the right constraint mode even when the Provider
+// dropdown still reads "Custom".
+function providerForEndpoint(endpoint) {
+  const url = String(endpoint || '').toLowerCase();
+  for (const [key, p] of Object.entries(PROVIDERS)) {
+    if (key === 'custom' || !p.endpoint) continue;
+    try {
+      if (url.startsWith(new URL(p.endpoint).origin)) return { key, ...p };
+    } catch { /* malformed saved URL: fall through */ }
+  }
+  return { key: 'custom', ...PROVIDERS.custom };
+}
+
+/** Repopulate the model dropdown for a provider, keeping any custom value. */
+function syncModelOptions(provider) {
+  const info = providerInfo(provider);
+  const keep = aiModelSelect.value;
+  if (info.models.length === 0) return; // custom: leave the built-in list alone
+  aiModelSelect.innerHTML = '';
+  for (const [value, label] of info.models) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    aiModelSelect.appendChild(opt);
+  }
+  // Preserve a saved/typed model that this provider list does not cover, so
+  // switching providers never silently discards a working configuration.
+  const values = info.models.map(([v]) => v);
+  if (keep && !values.includes(keep)) {
+    const opt = document.createElement('option');
+    opt.value = keep;
+    opt.textContent = keep + ' (saved)';
+    aiModelSelect.appendChild(opt);
+  } else {
+    aiModelSelect.value = keep && values.includes(keep) ? keep : info.models[0][0];
+  }
+}
+
+/**
+ * Apply a provider: prefill the endpoint and model list, but never overwrite an
+ * endpoint the user has customised for that same provider.
+ */
+function applyProvider(provider, { resetEndpoint = true } = {}) {
+  const info = providerInfo(provider);
+  if (aiProviderHint) aiProviderHint.textContent = info.hint;
+  if (info.endpoint && resetEndpoint) aiEndpointInput.value = info.endpoint;
+  syncModelOptions(provider);
+}
+
+const aiProviderSelect = document.getElementById('ai-provider-select');
+const aiProviderHint = document.getElementById('ai-provider-hint');
+
 // Load settings from localStorage
 function loadAiSettings() {
   const saved = localStorage.getItem('apro_ai_settings');
@@ -4151,11 +4315,49 @@ function loadAiSettings() {
     try {
       const s = JSON.parse(saved);
       if (s.api_key) aiApiKeyInput.value = s.api_key;
-      if (s.model) aiModelSelect.value = s.model;
+      if (s.model) {
+        // Make sure a saved model survives even if it is not in the default list.
+        if (!Array.from(aiModelSelect.options).some(o => o.value === s.model)) {
+          const opt = document.createElement('option');
+          opt.value = s.model;
+          opt.textContent = s.model + ' (saved)';
+          aiModelSelect.appendChild(opt);
+        }
+        aiModelSelect.value = s.model;
+      }
       if (s.endpoint) aiEndpointInput.value = s.endpoint;
+      if (aiProviderSelect) {
+        aiProviderSelect.value = s.provider || providerForEndpoint(s.endpoint).key || 'custom';
+      }
+      if (s.generation) aiGenerationSelect.value = s.generation;
+      if (s.needle_weights) needleWeightsInput.value = s.needle_weights;
+      if (typeof s.needle_steps === 'boolean' && needleStepsCheck) needleStepsCheck.checked = s.needle_steps;
+      if (typeof s.needle_fast === 'boolean' && needleFastCheck) needleFastCheck.checked = s.needle_fast;
+      if (typeof s.thinking === 'boolean' && aiThinkingToggle) aiThinkingToggle.checked = s.thinking;
     } catch {}
   }
+  updateProviderHintOnly();
+  updateNeedleStatus();
 }
+
+/** Refresh just the hint text, without touching endpoint or models. */
+function updateProviderHintOnly() {
+  if (!aiProviderHint) return;
+  const key = aiProviderSelect ? aiProviderSelect.value : 'custom';
+  // Prefer what the endpoint actually is over what the dropdown claims.
+  const effective = key === 'custom' ? providerForEndpoint(aiEndpointInput.value) : providerInfo(key);
+  aiProviderHint.textContent = effective.hint || '';
+}
+
+if (aiProviderSelect) {
+  aiProviderSelect.addEventListener('change', () => {
+    const info = providerInfo(aiProviderSelect.value);
+    // Switching providers should not carry the old endpoint over.
+    if (info.endpoint) aiEndpointInput.value = info.endpoint;
+    applyProvider(aiProviderSelect.value);
+  });
+}
+
 loadAiSettings();
 
 function saveAiSettings() {
@@ -4163,13 +4365,69 @@ function saveAiSettings() {
     api_key: aiApiKeyInput.value,
     model: aiModelSelect.value,
     endpoint: aiEndpointInput.value,
+    provider: aiProviderSelect ? aiProviderSelect.value : 'custom',
+    generation: aiGenerationSelect.value,
+    needle_weights: needleWeightsInput.value,
+    needle_steps: needleStepsCheck ? needleStepsCheck.checked : true,
+    needle_fast: needleFastCheck ? needleFastCheck.checked : true,
+    thinking: aiThinkingToggle ? aiThinkingToggle.checked : false,
   }));
+  updateNeedleStatus();
+}
+
+// "Needle" generation is only meaningful with a model path set.
+function needleModeEnabled() {
+  return aiGenerationSelect.value === 'needle' && !!needleWeightsInput.value.trim();
+}
+
+// Micro-step mode: the API planner emits one atomic, Needle-shaped change per
+// todo, tagged `needle:` (local) or `api:` (cloud).
+function needleStepsEnabled() {
+  return needleModeEnabled() && !!needleStepsCheck && needleStepsCheck.checked;
+}
+
+// Fast mode: collapse the session to 1-3 API calls (plan -> one batched patch
+// for whatever the local model can't do -> one combined review).
+function needleFastEnabled() {
+  return needleStepsEnabled() && !!needleFastCheck && needleFastCheck.checked;
+}
+
+function updateNeedleStatus() {
+  if (!needleStatusEl) return;
+  const on = aiGenerationSelect.value === 'needle';
+  needleStatusEl.style.display = on ? '' : 'none';
+  if (!on) return;
+  const has = !!needleWeightsInput.value.trim();
+  needleStatusEl.textContent = has ? 'ready' : 'no model set';
+  needleStatusEl.classList.toggle('ok', has);
+  needleStatusEl.classList.toggle('err', !has);
+}
+
+if (aiGenerationSelect) aiGenerationSelect.addEventListener('change', updateNeedleStatus);
+if (needleWeightsInput) needleWeightsInput.addEventListener('input', updateNeedleStatus);
+if (needleWeightsBrowse) {
+  needleWeightsBrowse.addEventListener('click', async () => {
+    const invoke = tauriInvoke();
+    if (!invoke) return;
+    try {
+      const path = await invoke('pick_file_dialog', { filterName: 'Needle model', extensions: ['cact'] });
+      if (path) { needleWeightsInput.value = path; updateNeedleStatus(); }
+    } catch (e) {
+      window.__ux?.notify?.('Could not open file dialog: ' + errToMessage(e), 'error', 2500);
+    }
+  });
 }
 
 // Settings modal
 let aiSettingsOpen = false;
 aiSettingsBtn.addEventListener('click', () => {
   aiSettingsOpen = !aiSettingsOpen;
+  if (aiSettingsOpen) {
+    // Re-sync on open: the model list and hint depend on the provider, and the
+    // endpoint may have been typed by hand since the modal was last shown.
+    applyProvider(aiProviderSelect ? aiProviderSelect.value : 'custom', { resetEndpoint: false });
+    updateProviderHintOnly();
+  }
   aiSettingsModal.style.display = aiSettingsOpen ? 'flex' : 'none';
 });
 aiSettingsClose.addEventListener('click', () => {
@@ -4286,6 +4544,41 @@ const PLAN_CONTRACT =
   '- Choose all radii BEFORE adding parts: parts that join a body tube must share the body radius (within 2.0); anything mounted INSIDE the body must satisfy tank.radius + tank.wall <= body.radius - body.wall. If the request gives conflicting radii, resolve the conflict in your plan (e.g. shrink the inner part) so every todo is executable.\n' +
   '- Units: all lengths are in the document\'s Units (default Millimeters). Convert real-world sizes to the document units — a real F-1 nozzle chamber is about 1000 mm across, so write 1000.0, NOT 1.0. Never plan sub-mm structural parts.\n' +
   '- Decide the number of todos yourself — 1 to 40, no artificial limit; the request decides. If the design already fully satisfies the request, emit an empty list: Plan(todos: []).';
+
+// Micro-step planning contract (Needle mode): decompose the request into one
+// atomic change per todo, each tagged with the executor that should handle it.
+// `needle:` steps must use ONLY the tiny vocabulary the local model was trained
+// on, so it can execute them; everything else is tagged `api:` and goes cloud.
+const NEEDLE_PLAN_CONTRACT =
+  '\n\n## Output contract (planning for the local Needle executor — STRICT)\n' +
+  'Think through the request against the component inventory, then emit exactly ONE `Plan` value and nothing else.\n' +
+  'A Plan is: Plan(todos: ["<step>", "<step>", ...])\n' +
+  'Each step is ONE atomic change, prefixed with the executor that must handle it:\n' +
+  '- `needle: <command>` — ONLY when the change matches one of the local model\'s learned commands. Allowed shapes (use the exact wording, one change per step):\n' +
+  '    * needle: set the Nose length to 300\n' +
+  '    * needle: set the Body radius to 45\n' +
+  '    * needle: set the Body wall to 2\n' +
+  '    * needle: set the Nose color to red\n' +
+  '    * needle: set the Body material to Steel-4130\n' +
+  '    * needle: set the Nozzle throat to 32\n' +
+  '    * needle: add a parameter body_od = 98\n' +
+  '  The part word MUST be exactly one of Nose, Body, Nozzle, Fins (the local model knows only these four). length/radius/wall/color/material apply only to a part that actually has that property; use `set the Nozzle throat to N` for a nozzle throat.\n' +
+  '- `api: <instruction>` — EVERYTHING else: adding or removing components, Solid ops, machined features (holes, bolt circles, patterns), fin geometry, profiles, transforms, visibility, multi-property rewrites, or any change not in the needle list above.\n' +
+  'Rules:\n' +
+  '- ONE change per step. Never combine two properties, and never bundle an api change into a needle step.\n' +
+  '- Never emit `needle:` for something outside the allowed shapes — misrouted steps are rejected and re-sent to the API, wasting a round trip.\n' +
+  '- Units are the document Units (default Millimeters); write plain numbers.\n' +
+  '- Order steps so they apply cleanly (set radii before adding parts that must mate).\n' +
+  '- If the design already satisfies the request, emit an empty list: Plan(todos: []).';
+
+// Split a planned todo into its executor route and the bare command text.
+// Untagged steps are `any` (try local first, then the API).
+function parseStepRoute(todo) {
+  const m = String(todo).match(/^\s*(needle|api)\s*:\s*([\s\S]*)$/i);
+  if (m) return { route: m[1].toLowerCase(), text: m[2].trim() };
+  return { route: 'any', text: String(todo).trim() };
+}
+
 
 // Design step: the session starts by generating a COMPLETE new document from
 // the request, then refines it via patches. The model must not build designs
@@ -4424,22 +4717,54 @@ async function callAi(systemPrompt, userPrompt, opts = {}) {
     max_tokens: 4096,
   };
 
+  // DeepSeek ships thinking mode ENABLED by default, and its reasoning tokens
+  // count against max_tokens. Measured on a short planning prompt: ~3.7k
+  // completion tokens with thinking vs ~50 without, and a tight budget can be
+  // consumed entirely by reasoning, returning an empty `content` that looks
+  // like a failed request. It also silently ignores `temperature`, so the
+  // per-step temperatures below have no effect in that mode.
+  const providerKey = providerForEndpoint(endpoint).key;
+  if (providerKey === 'deepseek') {
+    body.thinking = { type: aiThinkingToggle && aiThinkingToggle.checked ? 'enabled' : 'disabled' };
+    // Temperature is ignored while thinking is on; only send it otherwise so
+    // the request says what it means.
+    if (body.thinking.type === 'enabled') delete body.temperature;
+  }
+
   // Edit mode: constrain output. Cloud endpoints get response_format
   // json_schema (model emits JSON -> converted to RON), local llama.cpp
-  // endpoints get a GBNF grammar (model emits RON directly).
+  // endpoints get a GBNF grammar (model emits RON directly), and providers with
+  // no schema knob are asked for RON in the prompt.
   const CONSTRAINT_KINDS = {
     vehicle: { name: 'apro_vehicle', schema: 'vehicle_schema', gbnf: 'gbnf_vehicle' },
     component: { name: 'apro_component', schema: 'component_schema', gbnf: 'gbnf_component' },
     patch: { name: 'apro_patch', schema: 'patch_schema', gbnf: 'gbnf_patch' },
     plan: { name: 'apro_plan', schema: 'plan_schema', gbnf: 'gbnf_plan' },
   };
+  const RON_ONLY_CONTRACT =
+    '\n\n## Output format (STRICT)\n' +
+    'Respond with ONE RON value and nothing else — no prose, no markdown fences, ' +
+    'no explanation. Use RON syntax exactly as the contract above describes: ' +
+    'struct/variant fields in parentheses, lists in square brackets, and every ' +
+    'float written with a decimal point.';
+
   const wantConstraint = opts.constrain && opts.constrain !== 'none';
-  if (wantConstraint && !aiUnconstrained) {
+  const constraintMode = isLocalEndpoint(endpoint)
+    ? 'grammar'
+    : providerForEndpoint(endpoint).constraint;
+  // The prompt-only mode needs no schema bundle, so it is decided before the
+  // (Tauri-only) schema fetch and still counts as constrained.
+  if (wantConstraint && !aiUnconstrained && constraintMode === 'ron') {
+    body.messages[0].content += RON_ONLY_CONTRACT;
+  } else if (wantConstraint && !aiUnconstrained) {
     const bundle = await loadAiSchemaBundle();
     if (bundle) {
       const kind = CONSTRAINT_KINDS[opts.constrain] || CONSTRAINT_KINDS.vehicle;
-      if (isLocalEndpoint(endpoint)) {
+      if (constraintMode === 'grammar') {
         body.grammar = bundle[kind.gbnf];
+      } else if (constraintMode === 'none') {
+        aiUnconstrained = true;
+        updateConstraintBadge();
       } else {
         body.response_format = {
           type: 'json_schema',
@@ -4474,16 +4799,28 @@ async function callAi(systemPrompt, userPrompt, opts = {}) {
   // Bounded request loop: rate limits and constraint rejections can arrive in
   // ANY order (a schema-rejection 400 often follows 429 retries — the old
   // sequential checks missed that case and surfaced raw API errors).
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 8; attempt++) {
     resp = await postToAi();
     if (resp.ok) break;
 
     if (resp.status === 429) {
       const errText = await resp.text().catch(() => '');
-      const cooldownMatch = errText.match(/try again in ([\d.]+)s/);
-      const waitMs = cooldownMatch
-        ? Math.ceil(parseFloat(cooldownMatch[1]) * 1000) + 500
-        : Math.min(5000 * ((attempt % 3) + 1), 15000);
+      // Prefer the server's own signal: Retry-After header, then the body's
+      // "try again in Ns/ms"; otherwise exponential backoff. Add jitter so
+      // parallel callers don't retry in lockstep.
+      let waitMs = 0;
+      const retryAfter = resp.headers && resp.headers.get ? resp.headers.get('retry-after') : null;
+      if (retryAfter) {
+        const secs = parseFloat(retryAfter);
+        if (!Number.isNaN(secs)) waitMs = secs * 1000;
+        else { const when = Date.parse(retryAfter); if (!Number.isNaN(when)) waitMs = when - Date.now(); }
+      }
+      if (!waitMs) {
+        const m = errText.match(/try again in ([\d.]+)\s*(ms|s)/i);
+        if (m) waitMs = parseFloat(m[1]) * (m[2].toLowerCase() === 'ms' ? 1 : 1000);
+      }
+      if (!waitMs) waitMs = Math.min(2000 * Math.pow(2, attempt), 20000);
+      waitMs = Math.max(500, waitMs) + Math.floor(Math.random() * 400);
       addAgentLine(`  ⏳ rate-limited, waiting ${(waitMs / 1000).toFixed(1)}s...`, 'agent-err');
       await new Promise(r => setTimeout(r, waitMs));
       continue;
@@ -4513,7 +4850,24 @@ async function callAi(systemPrompt, userPrompt, opts = {}) {
     throw new Error('API returned empty response');
   }
 
-  return { content: data.choices[0].message.content.trim(), constrained: !aiUnconstrained && wantConstraint };
+  const choice = data.choices[0];
+  const content = (choice.message && choice.message.content) || '';
+  if (!content.trim()) {
+    // The likeliest cause on DeepSeek is thinking mode consuming the whole
+    // max_tokens budget, so name that rather than a bare "empty response".
+    const reasoning = (choice.message && choice.message.reasoning_content) || '';
+    const usedReasoning = providerKey === 'deepseek' && !!reasoning;
+    const trimmed = choice.finish_reason === 'length';
+    const why = usedReasoning
+      ? 'the model spent its whole token budget on reasoning before writing an answer'
+      : (trimmed ? 'the response hit the max_tokens limit' : 'the model returned no content');
+    throw new Error(
+      `API returned empty content: ${why}` +
+      (usedReasoning ? '. Turn off "DeepSeek thinking mode" in settings (⚙), or raise max_tokens.' : '.')
+    );
+  }
+
+  return { content: content.trim(), constrained: !aiUnconstrained && wantConstraint };
 }
 
 // ===== Agent loop: design from scratch -> plan -> execute -> fix -> review =====
@@ -4699,16 +5053,231 @@ async function applyPatchRonToEditor(patchRon, baseRon) {
   return wasComp && !structural ? unwrapRon(res.vehicle_ron, true) : res.vehicle_ron;
 }
 
+// ===== Needle Mode: the local model executes simple edits, API handles the rest =====
+// Two-tier design: the API LLM still plans (todos); each simple todo is tried
+// against the on-device Needle model first (~300 ms), and anything the local
+// model can't produce a *valid* patch for is escalated back to the API.
+let needleSchemaCache = null;
+let needleUnavailable = false;
+
+async function loadNeedleSchema() {
+  if (needleSchemaCache) return needleSchemaCache;
+  const invoke = tauriInvoke();
+  if (!invoke) return null;
+  try {
+    needleSchemaCache = await invoke('get_needle_schema');
+  } catch (e) {
+    console.warn('get_needle_schema failed:', e);
+    needleSchemaCache = null;
+  }
+  return needleSchemaCache;
+}
+
+// One local inference turn (engine resets per call). Returns the raw envelope
+// ({type, function_calls, reasoning, ...}); throws when the runtime is missing.
+async function callNeedle(query) {
+  const invoke = tauriInvoke();
+  if (!invoke) throw new Error('Needle requires the desktop app');
+  const tools = await loadNeedleSchema();
+  if (!tools) throw new Error('could not load the Needle tool schema');
+  return invoke('needle_run', {
+    query,
+    tools,
+    weights: needleWeightsInput.value.trim() || null,
+    reset: true,
+  });
+}
+
+// JSON string escaping is valid RON for the plain values we emit here.
+function ronStr(s) { return JSON.stringify(String(s)); }
+
+// The model was trained on 4 canonical parts; map them onto real components
+// (which may be named "NoseCone-1", "BodyTube-2", ...) by kind.
+const NEEDLE_KIND_ALIASES = {
+  nose: ['nosecone', 'nose'],
+  body: ['bodytube', 'body'],
+  nozzle: ['nozzle'],
+  fins: ['finset', 'fin'],
+  tank: ['tank'],
+};
+
+function needleResolveComponent(name, tables) {
+  const want = String(name || '').toLowerCase();
+  const exact = (tables || []).find(t => t.name.toLowerCase() === want);
+  if (exact) return exact;
+  const aliasKinds = NEEDLE_KIND_ALIASES[want] || [want];
+  return (tables || []).find(t => aliasKinds.some(k => (t.kind || '').toLowerCase().includes(k))) || null;
+}
+
+// Kind-aware resolution of a semantic Needle key onto a real inventory key.
+function needleKeyCandidates(sem, kind) {
+  const k = (kind || '').toLowerCase();
+  switch (sem) {
+    case 'length': return ['length', 'cylindrical_length'];
+    case 'radius':
+      if (k.includes('nose')) return ['base_radius'];
+      if (k.includes('nozzle')) return ['chamber_radius'];
+      if (k.includes('transition')) return ['start_radius', 'end_radius'];
+      return ['radius', 'base_radius', 'chamber_radius'];
+    case 'wall': return ['wall', 'thickness'];
+    case 'color': return ['color'];
+    case 'material': return ['material'];
+    case 'visible': return ['visible'];
+    default: return [sem];
+  }
+}
+
+function needleResolveKey(comp, candidates) {
+  const keys = new Set((comp.rows || []).map(r => r.key));
+  for (const c of candidates) {
+    // color/visible are component-level fields, not kind rows.
+    if (c === 'color' || c === 'visible' || keys.has(c)) return c;
+  }
+  return null;
+}
+
+// Translate one Needle function call into a RON Patch. Throws when the call is
+// unsupported, targets an unknown component, or has no usable key — the caller
+// then escalates the todo to the API.
+function needleCallToPatch(call, tables) {
+  const name = call && call.name;
+  const a = (call && call.arguments) || {};
+
+  if (name === 'describe_vehicle') return { patchRon: 'Noop', read: true };
+
+  if (name === 'add_parameter') {
+    if (!a.name || a.value == null) throw new Error('add_parameter needs a name and value');
+    return { patchRon: `SetParameter(name: ${ronStr(a.name)}, value: ${ronStr(a.value)})` };
+  }
+
+  // Machined features are structural (Solid ops) — too much for the narrow model.
+  if (name === 'set_circle') throw new Error('set_circle is not supported locally');
+
+  const comp = needleResolveComponent(a.component_name, tables);
+  if (!comp) throw new Error(`unknown component "${a.component_name}"`);
+
+  if (name === 'set_throat') {
+    const key = needleResolveKey(comp, ['throat_radius', 'throat', 'radius']);
+    if (!key) throw new Error(`${comp.name} has no throat dimension`);
+    return { patchRon: `SetProperty(component_name: ${ronStr(comp.name)}, key: ${ronStr(key)}, value: ${ronStr(a.value)})` };
+  }
+
+  if (name === 'set_property') {
+    const sem = String(a.key || '').toLowerCase();
+    const key = needleResolveKey(comp, needleKeyCandidates(sem, comp.kind));
+    if (!key) throw new Error(`${comp.name} has no "${sem}" property`);
+    return { patchRon: `SetProperty(component_name: ${ronStr(comp.name)}, key: ${ronStr(key)}, value: ${ronStr(a.value)})` };
+  }
+
+  throw new Error(`unsupported needle tool "${name}"`);
+}
+
+// Confirm a call's argument values are actually evidenced in the request text,
+// tolerating the model's numeric formatting ("32.0" for "32").
+function needleValueGrounded(call, todo) {
+  const text = String(todo).toLowerCase();
+  const args = (call && call.arguments) || {};
+  for (const [k, val] of Object.entries(args)) {
+    if (k === 'component_name' || k === 'name' || k === 'key') continue;
+    const s = String(val).toLowerCase();
+    if (text.includes(s)) continue;
+    const n = parseFloat(s);
+    if (!Number.isNaN(n)) {
+      const variants = [String(n), n.toFixed(0), n.toFixed(1), n.toFixed(2)];
+      if (variants.some(v => text.includes(v.toLowerCase()))) continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+// Try to satisfy a todo with the local model. Never throws: returns
+//   { handled: true }                      — applied (or a legitimate no-op)
+//   { handled: false, why: '<reason>' }    — escalate this todo to the API
+async function tryNeedleTodo(todo, ctx) {
+  let resp;
+  try {
+    resp = await callNeedle(todo);
+  } catch (e) {
+    needleUnavailable = true;
+    return { handled: false, why: errToMessage(e) };
+  }
+
+  const calls = resp.function_calls || [];
+  if (resp.type !== 'call' || calls.length === 0) {
+    return { handled: false, why: 'no call' };
+  }
+
+  // The engine flags arguments whose values aren't evidenced in the request,
+  // but it compares literally — the model's "32.0" vs the request's "32" trips
+  // it. Re-check locally with numeric normalisation, and only escalate when the
+  // value genuinely isn't in the request.
+  const v = resp.validation || {};
+  if (v.negation) {
+    return { handled: false, why: 'negation' };
+  }
+  if (Array.isArray(v.ungrounded) && v.ungrounded.length > 0 && !needleValueGrounded(calls[0], todo)) {
+    return { handled: false, why: `ungrounded (${v.ungrounded.join(', ')})` };
+  }
+
+  const invoke = tauriInvoke();
+  let tables = [];
+  try { tables = (await invoke('describe_vehicle', { vehicleRon: wrapRon(getEditorRon()) })) || []; } catch {}
+
+  let patch;
+  try {
+    patch = needleCallToPatch(calls[0], tables);
+  } catch (e) {
+    return { handled: false, why: errToMessage(e) };
+  }
+
+  if (patch.read) {
+    addAgentLine('  ✓ needle: read-only request', 'agent-ok');
+    return { handled: true };
+  }
+
+  const prev = editor.value;
+  try {
+    const updated = await applyPatchRonToEditor(patch.patchRon, prev);
+    if (updated === prev) {
+      addAgentLine('  ✓ needle: no effective change', 'agent-ok');
+      return { handled: true };
+    }
+    editor.value = updated;
+    await agentEvaluate();
+    lastDesignState = await captureDesignState(updated);
+    const d = computeDiff(prev, updated);
+    const short = patch.patchRon.length > 90 ? patch.patchRon.slice(0, 90) + '…' : patch.patchRon;
+    addAgentLine(`  ✓ needle applied ${short} (+${d.added}/−${d.removed})`, 'agent-ok');
+    ctx.history.push(`needle: ${short}`);
+    return { handled: true };
+  } catch (e) {
+    return { handled: false, why: errToMessage(e) };
+  }
+}
+
 async function executeTodo(idx, total, todo, ctx) {
-  const label = `[${idx}/${total}] ${todo}`;
+  const { route, text } = parseStepRoute(todo);
+  const routeTag = route === 'needle' ? ' [local]' : route === 'api' ? ' [api]' : '';
+  const label = `[${idx}/${total}]${routeTag} ${text}`;
   let stepPrompt =
-    `Current todo (${idx}/${total}): "${todo}"\n\n` +
+    `Current todo (${idx}/${total}): "${text}"\n\n` +
     `Changes already applied in this session:\n` +
     (ctx.history.length ? ctx.history.map(h => '- ' + h).join('\n') : '(none)') +
     `\n\nRespond with exactly one Patch. If this todo requires no change to the design, respond with Noop.`;
 
   for (let attempt = 1; attempt <= MAX_TODO_RETRIES; attempt++) {
     addAgentLine(`▸ ${label}`, 'agent-todo');
+
+    // Local first pass: try the on-device model once; any failure escalates to
+    // the API path below (which has the full stop-and-fix retry loop). Steps the
+    // planner tagged `api:` skip this entirely.
+    if (attempt === 1 && route !== 'api' && needleModeEnabled() && !needleUnavailable) {
+      const n = await tryNeedleTodo(text, ctx);
+      if (n.handled) return { applied: true };
+      addAgentLine(`  ↳ needle: ${n.why} — escalating to API`, 'agent-warn');
+    }
+
     let lastModelContent = '';
     try {
       const { content } = await callAi(ctx.systemPromptBase + PATCH_CONTRACT, stepPrompt, { constrain: 'patch' });
@@ -4878,6 +5447,35 @@ async function runReviewPass(ctx) {
   }
 }
 
+// Full-document generation. Used ONLY when there is no editable document, or
+// the planner explicitly routes to __regenerate__. Shared by both session types.
+async function generateFullDesign(userPrompt, desc) {
+  const genBase = await buildSystemPrompt(userPrompt, { retrieve: false });
+  for (let attempt = 1; attempt <= MAX_TODO_RETRIES; attempt++) {
+    addAgentLine(`▸ designing from scratch (attempt ${attempt}/${MAX_TODO_RETRIES})`, 'agent-todo');
+    try {
+      const { content } = await callAi(genBase.prompt + DESIGN_CONTRACT, desc || userPrompt, { constrain: 'vehicle', temperature: 0.4 });
+      const designRon = await extractWholeDoc(content);
+      await validateDocumentRon(designRon);
+      const prev = editor.value;
+      editor.value = designRon;
+      await agentEvaluate();
+      lastDesignState = await captureDesignState(editor.value);
+      const d0 = computeDiff(prev, editor.value);
+      addAgentLine(`✓ generated new design from scratch (+${d0.added}/−${d0.removed})`, 'agent-ok');
+      return true;
+    } catch (err) {
+      const msg = errToMessage(err);
+      if (attempt >= MAX_TODO_RETRIES) {
+        addAgentLine(`  ✗ design generation failed after ${MAX_TODO_RETRIES} attempts — aborting`, 'agent-err');
+        throw new Error('The AI could not produce a valid design: ' + msg);
+      }
+      addAgentLine(`  ✗ ${msg} — retrying with the error`, 'agent-err');
+    }
+  }
+  return false;
+}
+
 async function runAgentSession(userPrompt, originalRon) {
   addAgentLine(`thinking about "${userPrompt.length > 70 ? userPrompt.slice(0, 70) + '…' : userPrompt}"…`, 'agent-think');
   lastDesignState = null;
@@ -4901,45 +5499,17 @@ async function runAgentSession(userPrompt, originalRon) {
     addAgentLine(`@-mentions (${mentionedNames.join(', ')}) → inline edit mode locked`, 'agent-plan');
   }
 
-  // Full-document generation. Used ONLY when there is no editable document,
-  // or the planner explicitly routes to __regenerate__.
-  async function generateFullDesign(desc) {
-    const genBase = await buildSystemPrompt(userPrompt, { retrieve: false });
-    for (let attempt = 1; attempt <= MAX_TODO_RETRIES; attempt++) {
-      addAgentLine(`▸ designing from scratch (attempt ${attempt}/${MAX_TODO_RETRIES})`, 'agent-todo');
-      try {
-        const { content } = await callAi(genBase.prompt + DESIGN_CONTRACT, desc || userPrompt, { constrain: 'vehicle', temperature: 0.4 });
-        const designRon = await extractWholeDoc(content);
-        await validateDocumentRon(designRon);
-        const prev = editor.value;
-        editor.value = designRon;
-        await agentEvaluate();
-        lastDesignState = await captureDesignState(editor.value);
-        const d0 = computeDiff(prev, editor.value);
-        addAgentLine(`✓ generated new design from scratch (+${d0.added}/−${d0.removed})`, 'agent-ok');
-        return true;
-      } catch (err) {
-        const msg = errToMessage(err);
-        if (attempt >= MAX_TODO_RETRIES) {
-          addAgentLine(`  ✗ design generation failed after ${MAX_TODO_RETRIES} attempts — aborting`, 'agent-err');
-          throw new Error('The AI could not produce a valid design: ' + msg);
-        }
-        addAgentLine(`  ✗ ${msg} — retrying with the error`, 'agent-err');
-      }
-    }
-    return false;
-  }
-
   // 1) No usable base document → generation is the only sensible path.
-  if (!hasDoc) await generateFullDesign(userPrompt);
+  if (!hasDoc) await generateFullDesign(userPrompt, userPrompt);
 
   // 2) Planning: inline-edit todos by default; the planner routes explicit
   // redesigns via a single __regenerate__ todo.
   const base = await buildSystemPrompt(userPrompt); // inventory + library hits
+  const planContract = needleStepsEnabled() ? NEEDLE_PLAN_CONTRACT : PLAN_CONTRACT;
   let todos = null;
   let regenerated = false;
   try {
-    const { content } = await callAi(base.prompt + PLAN_CONTRACT, userPrompt, { constrain: 'plan', temperature: 0.3 });
+    const { content } = await callAi(base.prompt + planContract, userPrompt, { constrain: 'plan', temperature: 0.3 });
     todos = parsePlan(content);
   } catch (err) {
     addAgentLine(`✗ planning failed: ${err.message}`, 'agent-err');
@@ -4956,7 +5526,7 @@ async function runAgentSession(userPrompt, originalRon) {
         todos = null;
         try {
           const fix = await callAi(
-            base.prompt + PLAN_CONTRACT +
+            base.prompt + planContract +
               '\n\nSTRICT OVERRIDE: do NOT emit __regenerate__. The request references existing components — emit only inline edit todos.',
             userPrompt,
             { constrain: 'plan', temperature: 0.3 }
@@ -4971,7 +5541,7 @@ async function runAgentSession(userPrompt, originalRon) {
       }
     } else {
       addAgentLine(`router: explicit redesign → regenerating ("${desc.slice(0, 60)}")`, 'agent-plan');
-      await generateFullDesign(desc);
+      await generateFullDesign(userPrompt, desc);
       regenerated = true;
       todos = [];
     }
@@ -4985,6 +5555,9 @@ async function runAgentSession(userPrompt, originalRon) {
   todos = todos.slice(0, MAX_TODOS);
   if (todos.length > 0) {
     addAgentLine(`plan: ${todos.length} todo${todos.length > 1 ? 's' : ''}`, 'agent-plan');
+    if (needleModeEnabled()) {
+      addAgentLine('needle mode: simple todos run locally, hard ones escalate to the API', 'agent-plan');
+    }
   }
 
   // 4) Execute each todo inline, evolving the document in real time. Each step
@@ -5015,7 +5588,7 @@ async function runAgentSession(userPrompt, originalRon) {
     let fixed = 0;
     for (let i = 0; i < failures.length; i++) {
       const f = failures[i];
-      const result = await executeTodo(i + 1, failures.length, `Fix: ${f.todo} (previous error: ${f.error})`, ctx);
+      const result = await executeTodo(i + 1, failures.length, `Fix: ${parseStepRoute(f.todo).text} (previous error: ${f.error})`, ctx);
       if (result.applied) fixed++;
     }
     if (fixed > 0) {
@@ -5039,6 +5612,159 @@ async function runAgentSession(userPrompt, originalRon) {
     editor.value = formatRon(editor.value);
   }
   return { todos, failed, failures, hitIds: base.hitIds, regenerated };
+}
+
+// ===== Fast Needle session: 1 plan + 1 batched patch + 1 review =====
+// The API plans micro-steps; the local model executes the ones it can; the
+// remainder (api-tagged + local failures) go to the cloud in ONE call. This
+// replaces the per-todo API loop, which is what triggers rate limiting.
+async function runNeedleSession(userPrompt, originalRon) {
+  if (needleUnavailable) return runAgentSession(userPrompt, originalRon);
+
+  addAgentLine(`thinking about "${userPrompt.length > 70 ? userPrompt.slice(0, 70) + '…' : userPrompt}"…`, 'agent-think');
+  lastDesignState = null;
+
+  const invoke = tauriInvoke();
+  let hasDoc = false;
+  if (invoke) {
+    try { await invoke('describe_vehicle', { vehicleRon: getEditorRon() }); hasDoc = true; } catch {}
+  } else {
+    hasDoc = /Component\s*\(/.test(getEditorRon());
+  }
+  const mentionedNames = [...new Set([...userPrompt.matchAll(/@([\w-]+)/g)].map(m => m[1]))];
+  if (hasDoc && mentionedNames.length > 0) {
+    addAgentLine(`@-mentions (${mentionedNames.join(', ')}) → inline edit mode locked`, 'agent-plan');
+  }
+
+  if (!hasDoc) await generateFullDesign(userPrompt, userPrompt);
+
+  // 1) ONE planning call.
+  const base = await buildSystemPrompt(userPrompt);
+  let todos = null;
+  try {
+    const { content } = await callAi(base.prompt + NEEDLE_PLAN_CONTRACT, userPrompt, { constrain: 'plan', temperature: 0.3 });
+    todos = parsePlan(content);
+  } catch (err) {
+    addAgentLine(`✗ planning failed: ${errToMessage(err)}`, 'agent-err');
+    throw new Error('Planning failed: ' + errToMessage(err));
+  }
+
+  if (todos && todos.length === 1 && /^__regenerate__\b/i.test(todos[0].trim())) {
+    const desc = todos[0].replace(/^__regenerate__\s*:\s*/i, '').trim();
+    if (mentionedNames.length > 0) {
+      addAgentLine('regeneration refused — @-mentions target existing parts', 'agent-warn');
+      return { todos: [], failed: 0, failures: [], hitIds: base.hitIds };
+    }
+    addAgentLine(`router: explicit redesign → regenerating ("${desc.slice(0, 60)}")`, 'agent-plan');
+    await generateFullDesign(userPrompt, desc);
+    return { todos: [], failed: 0, failures: [], hitIds: base.hitIds, regenerated: true };
+  }
+  if (!todos || todos.length === 0) {
+    addAgentLine('model returned no micro-steps — design already satisfies the request', 'agent-warn');
+    return { todos: [], failed: 0, failures: [], hitIds: base.hitIds };
+  }
+  todos = todos.slice(0, MAX_TODOS);
+  addAgentLine(`plan: ${todos.length} micro-step${todos.length > 1 ? 's' : ''}`, 'agent-plan');
+
+  // 2) Execute local steps; queue everything else for one batched call.
+  const ctx = { systemPromptBase: base.prompt, history: [] };
+  const cloudSteps = [];
+  let localDone = 0;
+  for (let i = 0; i < todos.length; i++) {
+    const { route, text } = parseStepRoute(todos[i]);
+    const tag = route === 'needle' ? ' [local]' : route === 'api' ? ' [api]' : '';
+    addAgentLine(`▸ [${i + 1}/${todos.length}]${tag} ${text}`, 'agent-todo');
+    if (route === 'api') { cloudSteps.push(text); continue; }
+    const n = await tryNeedleTodo(text, ctx);
+    if (n.handled) localDone++;
+    else { addAgentLine(`  ↳ needle: ${n.why} — queued for the API batch`, 'agent-warn'); cloudSteps.push(text); }
+  }
+  if (localDone > 0) addAgentLine(`local: ${localDone}/${todos.length} step(s) applied on-device`, 'agent-ok');
+
+  // 3) ONE API call for the remainder.
+  const failures = [];
+  let failed = 0;
+  if (cloudSteps.length > 0) {
+    addAgentLine(`api batch: ${cloudSteps.length} step(s) in one call`, 'agent-plan');
+    const fresh = await buildSystemPrompt(userPrompt, { retrieve: false });
+    ctx.systemPromptBase = fresh.prompt;
+    const batchPrompt =
+      'Apply ALL of the following changes in ONE step. Emit exactly ONE Patch — a single PatchList containing every change.\n' +
+      cloudSteps.map((s, i) => `${i + 1}. ${s}`).join('\n') +
+      '\n\nEvery sub-patch must be valid on its own; the list is applied atomically. Use one SetProperty per property.';
+    let batched = false;
+    try {
+      const { content } = await callAi(fresh.prompt + PATCH_CONTRACT, batchPrompt, { constrain: 'patch' });
+      const parsed = await contentToPatchRon(content);
+      const patch = parsed && parsed.patchRon ? parsed.patchRon.trim() : null;
+      if (patch && patch !== 'Noop' && isPatchRon(patch)) {
+        const prev = editor.value;
+        const updated = await applyPatchRonToEditor(patch, prev);
+        if (updated !== prev) {
+          editor.value = updated;
+          await agentEvaluate();
+          lastDesignState = await captureDesignState(updated);
+          const d = computeDiff(prev, updated);
+          addAgentLine(`  ✓ api batch applied (+${d.added}/−${d.removed})`, 'agent-ok');
+          ctx.history.push('api batch');
+        } else {
+          addAgentLine('  ✓ api batch: no effective change', 'agent-ok');
+        }
+      } else {
+        addAgentLine('  ✓ api batch: nothing to change', 'agent-ok');
+      }
+      batched = true;
+    } catch (err) {
+      addAgentLine(`  ✗ api batch rejected (${errToMessage(err)}) — falling back to per-step`, 'agent-warn');
+    }
+    if (!batched) {
+      for (let i = 0; i < cloudSteps.length; i++) {
+        const result = await executeTodo(i + 1, cloudSteps.length, cloudSteps[i], ctx);
+        if (!result.applied) { failed++; failures.push({ todo: cloudSteps[i], error: result.error || 'unknown error' }); }
+        if (i < cloudSteps.length - 1) await new Promise(r => setTimeout(r, 800));
+      }
+    }
+  }
+
+  const total = todos.length;
+  addAgentLine(`done: ${Math.max(0, total - failed)}/${total} micro-steps (${localDone} local)`, failed ? 'agent-warn' : 'agent-ok');
+
+  // 4) ONE combined review call, only if validation reports issues.
+  await runFastReview(ctx);
+
+  const t = editor.value.trim();
+  if (t.startsWith('Vehicle(') || t.startsWith('Component(')) editor.value = formatRon(editor.value);
+  return { todos, failed, failures, hitIds: base.hitIds, regenerated: false };
+}
+
+// One review call: only fires when validation reports issues; fixes them in a
+// single PatchList (replaces the 3-round review + optimize passes).
+async function runFastReview(ctx) {
+  const invoke = tauriInvoke();
+  let ev = null;
+  try { ev = await invoke('evaluate_vehicle', { vehicleRon: wrapRon(editor.value) }); } catch { return; }
+  const issues = (ev.issues || []).filter(i => ['warning', 'error'].includes((i.severity || '').toLowerCase()));
+  if (issues.length === 0) return;
+  addAgentLine(`review: ${issues.length} issue(s) — one combined fix call`, 'agent-plan');
+  const prompt =
+    'Review pass: the current design has these validation issues. Fix as many as possible in ONE Patch (prefer a PatchList). If an issue is acceptable, emit Noop.\n' +
+    issues.map(i => `- [${i.severity}] ${i.message}`).join('\n');
+  try {
+    const { content } = await callAi(ctx.systemPromptBase + PATCH_CONTRACT, prompt, { constrain: 'patch' });
+    const parsed = await contentToPatchRon(content);
+    const patch = parsed && parsed.patchRon ? parsed.patchRon.trim() : null;
+    if (!patch || patch === 'Noop' || !isPatchRon(patch)) { addAgentLine('  ✓ review: nothing to change', 'agent-ok'); return; }
+    const prev = editor.value;
+    const updated = await applyPatchRonToEditor(patch, prev);
+    if (updated === prev) { addAgentLine('  ✓ review: no effective change', 'agent-ok'); return; }
+    editor.value = updated;
+    await agentEvaluate();
+    lastDesignState = await captureDesignState(updated);
+    const d = computeDiff(prev, updated);
+    addAgentLine(`  ✓ review corrections applied (+${d.added}/−${d.removed})`, 'agent-ok');
+  } catch (err) {
+    addAgentLine(`  ✗ review rejected (${errToMessage(err)}) — keeping the current design`, 'agent-warn');
+  }
 }
 
 // AI send
@@ -5300,9 +6026,12 @@ aiSendBtn.addEventListener('click', async () => {
       addChatMessage({ role: 'assistant', content: response, mode: 'plan', todos: parsePlan(response) || undefined });
     } else {
       // Edit mode: agent loop — plan todos, execute each one, evolving the
-      // document in real time, repairing errors before moving on.
+      // document in real time, repairing errors before moving on. Fast Needle
+      // mode collapses this to 1 plan + 1 batched patch + 1 review call.
       if (thinkingMsgId) { removeChatMessage(thinkingMsgId); thinkingMsgId = null; }
-      const session = await runAgentSession(userPrompt, originalRon);
+      const session = needleFastEnabled()
+        ? await runNeedleSession(userPrompt, originalRon)
+        : await runAgentSession(userPrompt, originalRon);
       const finalRon = editor.value;
       const diff = originalRon ? computeDiff(originalRon, finalRon) : null;
       const done = session.todos.length - (session.failed || 0);
@@ -5361,6 +6090,15 @@ aiPrompt.addEventListener('keydown', (e) => {
 
 // ===== Keyboard shortcuts =====
 document.addEventListener('keydown', (e) => {
+  // While sketching, Ctrl+Z undoes the last sketch entity instead of the
+  // whole document (changing the document mid-sketch would discard the sketch).
+  if (window.__sketcher && window.__sketcher.isActive()) {
+    if (e.ctrlKey && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      if (window.__sketcher.getEntityCount() > 0) window.__sketcher.undoLast();
+    }
+    return;
+  }
   if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); evaluate(); }
   if (e.ctrlKey && e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
   if (e.ctrlKey && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) { e.preventDefault(); redo(); }
@@ -5371,15 +6109,29 @@ document.addEventListener('keydown', (e) => {
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  // Sketch overlay: keeps controls disabled across camera swaps and re-sizes
+  // the screen-constant snap marker. Cheap no-op when sketch mode is off.
+  if (window.__sketcher) window.__sketcher.tick();
   renderer.render(scene, camera);
 }
 
-// Initial load
+// Initial load: start on a blank canvas. The editor ships empty, but reset it
+// explicitly so the welcome state is unambiguous even if a stray draft bytes
+// survived (and so the preset control and badge agree with the editor).
+setEditorRon('');
+const presetSelect = document.getElementById('preset-select');
+if (presetSelect) presetSelect.value = '';
+updateKindBadge();
+
 setTimeout(() => {
   updateSize();
   evaluate();
+  window.__ux?.notify?.(
+    'Blank canvas — pick a preset above, or draw from the <b>Sketch</b> tab',
+    'info',
+    3600
+  );
 }, 50);
-updateKindBadge();
 animate();
 
 // Boot diagnostics: module fully evaluated.

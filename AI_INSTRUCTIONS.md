@@ -144,6 +144,7 @@ Tank(TankParams(radius: f64, cylindrical_length: f64, dome: DomeKind, wall: f64,
 Nozzle(NozzleParams(kind: NozzleKind, throat_radius: f64, expansion_ratio: f64, percent_bell: f64, chamber_radius: f64, wall: f64, material: String))
 FinSet(FinSetParams(count: u32, root_chord: f64, tip_chord: f64, span: f64, sweep: f64, airfoil: AirfoilParams, thickness: f64, material: String))
 Solid([SolidOp, ...])
+Sketch(SketchParams(plane: SketchPlane, offset: f64, entities: [SketchEntity, ...]))
 ```
 
 ### Referenced enums — variant name only, no path prefix
@@ -152,6 +153,7 @@ NoseProfile: Conical | Ogive | VonKarman | Power(n: f64) | Haack(c: f64) | Parab
 NozzleKind:  Conical | Bell | Moc
 DomeKind:    Hemispherical | Ellipsoidal(ratio: f64)
 AirfoilParams(family: NACA(digits: String))
+SketchPlane: XY | XZ | YZ
 ```
 
 ## RON Syntax Rules
@@ -194,6 +196,120 @@ Equation rules:
 - Changing a parameter recomputes every component that references it; cache fingerprints fold the resolved values in.
 - `Profile::UserFunction { expr, variable, range, samples }` evaluates `expr` against the parameters plus the free `variable` — useful for arbitrary curves (airfoils, ogives, racks).
 
+## Sketches — 2D profiles for Extrude/Revolve/Loft (2026-08)
+A `Sketch` is a named set of 2D entities drawn on a workplane. It is a **`ComponentKind`** and produces **no mesh of its own** — it is construction geometry. Turn it into a solid by referencing it from a solid op's `profile`.
+
+```
+Sketch(SketchParams(plane: XY, offset: 0.0, entities: [ ... ]))
+```
+- `plane` — `XY` (default), `XZ`, or `YZ`. Optional; omit for XY.
+- `offset` — plane origin distance along the plane normal. Optional; defaults to `0.0`.
+- `entities` — the 2D entities, in `(u, v)` plane coordinates.
+
+### Sketch entities (all fields compulsory)
+```
+Line(start: (u,v), end: (u,v))                     // straight segment
+Rectangle(corner1: (u,v), corner2: (u,v))          // axis-aligned, two opposite corners
+Circle(center: (u,v), radius: f64)                 // full circle
+Arc(center: (u,v), radius: f64, start_angle: f64, end_angle: f64)   // angles in RADIANS
+Spline(points: [(u,v), ...], closed: bool)         // Catmull-Rom through every point
+```
+- Points are 2-tuples `(u, v)` — **never** `[u, v]` and never 3 values. Correct: `(30.0, 20.0)`.
+- `Spline` needs at least 2 points; it passes through **every** point (Catmull-Rom, same as a sweep `Path3D::Spline`).
+- `Arc` sweeps counter-clockwise from `start_angle` to `end_angle`; the span is the CCW distance, so `start_angle: 4.712, end_angle: 1.571` is a valid half turn.
+
+### Plane coordinates → world axes
+The plane-local `(u, v)` frame maps to world space as:
+| plane | u axis | v axis | normal | solids built from it grow toward |
+|---|---|---|---|---|
+| `XY` | +X | +Y | +Z | +Z (matches `Extrude`) |
+| `XZ` | +X | +Z | -Y | -Y |
+| `YZ` | +Y | +Z | +X | +X |
+
+Use `XZ`/`YZ` when the intended extrusion should stand up in Y or X instead of Z.
+
+⚠ **Extruding a sketch already positions the solid on its workplane.** `Extrude(profile: Reference("S1"), height: 4.0)` on an `XZ` sketch produces a solid sitting on that plane reaching toward -Y — you do **not** add a `TransformOp` to move it there. A `TransformOp` after such an extrude is applied *relative* to the already-placed solid, so adding one to "put it on the plane" moves it twice.
+
+### Using a sketch (required pattern)
+Reference it **by component name** from the op's profile:
+```
+Extrude(profile: Reference("Sketch1"), height: 8.0, direction: None, taper: None)
+```
+`Profile` also accepts `Points(...)`, `Circle { radius }`, `Rectangle { width, height, corner_radius }`, `Polygon { sides, circumradius }` and `UserFunction { ... }` as before — use those for a one-off profile and a `Sketch` when the profile is drawn, reused, or edited as a feature.
+
+⚠ **A `Sketch` component is never rendered as a mesh and never interferes** with other parts (it has no mesh), so it will not raise an interference warning — that is expected, not a bug. The viewport draws it separately as a line overlay: closed loops in teal, unclosed leftovers in amber. Add `visible: false` to a sketch component to hide its overlay.
+
+⚠ **Do not use `PlacedReference { ... }`.** It is an internal/expert variant that inlines a plane placement; the supported authoring path is `Reference("Name")`, which reads the plane straight from the sketch.
+
+### Rules for a sketch to be extrudable (IMPORTANT)
+The compiler turns the entity bag into **one ordered, closed boundary loop**:
+1. Every entity is tessellated. `Rectangle`, `Circle` and `Spline(closed: true)` are already closed.
+2. Open entities (single `Line`s, `Arc`s, open `Spline`s) are **stitched end-to-end automatically**, so four separate `Line`s that meet corner-to-corner form a closed rectangle — order does not matter, and a segment may be drawn in either direction.
+3. Winding is normalised to counter-clockwise; you never need to care about point order.
+4. A sketch must form **exactly one closed region**:
+   - open geometry → `sketch profile is not closed (N open chains)`
+   - two or more separate regions → `sketch has N disjoint regions; extrude one region at a time`
+   - nothing → `sketch has no closed profile`
+5. A closed entity that shares an edge with another region is not merged into a hole — sketches have **no hole support** yet. Cut holes with `Boolean(Difference, ...)` or `Hole`/`BoltCircle`/`RectPattern` instead.
+
+### Worked example — a sketched plate
+```
+Vehicle(
+    name: "SketchPlate",
+    units: Millimeters,
+    components: [
+        Component(
+            name: "Sketch1",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XY,
+                offset: 0.0,
+                entities: [
+                    Rectangle(corner1: (0.0, 0.0), corner2: (80.0, 50.0)),
+                ],
+            )),
+        ),
+        Component(
+            name: "Plate",
+            material: "Al-6061-T6",
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(profile: Reference("Sketch1"), height: 8.0, direction: None, taper: None),
+            ]),
+        ),
+    ],
+)
+```
+
+### Worked example — an arc + lines outline on a side plane
+```
+Component(
+    name: "Sketch2",
+    material: "",
+    kind: Sketch(SketchParams(
+        plane: XZ,
+        offset: 12.0,
+        entities: [
+            Line(start: (0.0, 0.0), end: (40.0, 0.0)),
+            Arc(center: (40.0, 20.0), radius: 20.0, start_angle: 4.71238898038469, end_angle: 1.5707963267948966),
+            Line(start: (40.0, 40.0), end: (0.0, 40.0)),
+            Line(start: (0.0, 40.0), end: (0.0, 0.0)),
+        ],
+    )),
+)
+```
+Here the arc's endpoints are `(40, 0)` and `(40, 40)`, so the four entities stitch into one closed loop. This sketch sits on the XZ plane at `y = -12` and extrudes toward **-Y**.
+
+### Referenced enum: Profile (full shape)
+```
+Profile = Points([(x,y), ...])
+        | Circle { radius: f64 }
+        | Rectangle { width: f64, height: f64, corner_radius: Option<f64> }
+        | Polygon { sides: u32, circumradius: f64 }
+        | Reference(String)                 // a Sketch component by name
+        | UserFunction { expr: String, variable: String, range: [f64; 2], samples: u32 }
+```
+
 ## Component colors — per-part display colors (2026-08)
 Every `Component` accepts an optional `color` field. The renderer shows each part in its own color; when `color` is absent a stable color is derived from the material name.
 
@@ -225,6 +341,14 @@ These are areas where the AI often generates wrong code. Cross-check output care
 | Vehicle routing | `//` comments before `Vehicle(...)` caused wrong IPC command; fixed with `stripRonComments()` | FIXED 2026-07 |
 | Parameters pretty form | AI writes `Parameters(body_od: 98.0)` instead of the list form `parameters: Some([Parameter(name: "body_od", value: 98.0), ...])` | COMMON — pretty block only accepted on manual input; see Parameters section |
 | Parameters equation syntax | `2wall` (missing `*`), unquoted equations, or referencing an unknown name → patch rejected | COMMON — see Parameters section |
+| Sketch point syntax | Writes `[u, v]` or `(x, y, z)` for sketch points instead of the 2-tuple `(u, v)` | COMMON — see Sketches section |
+| Sketch arc angles | Writes degrees for `start_angle`/`end_angle`; they are RADIANS | COMMON — see Sketches section |
+| Sketch not closed | Open geometry (a lone `Line`/`Arc`/open `Spline`) → `sketch profile is not closed`; fix by adding the missing closing entity | See Sketches section |
+| Sketch disjoint regions | Two separate closed shapes in one sketch → `sketch has N disjoint regions`; use one sketch per region | See Sketches section |
+| Sketch has no holes | A circle inside a rectangle is a second region, NOT a hole; cut holes with `Boolean`/`Hole`/`BoltCircle`/`RectPattern` | See Sketches section |
+| `PlacedReference` | Internal variant; author sketches with `Reference("Sketch1")` instead | See Sketches section |
+| Sketch as a mesh | A `Sketch` component contributes no mesh and raises no interference warning — correct, not an error; it is drawn as a separate line overlay | See Sketches section |
+| Tapered extrude | `taper` is a **scale fraction**, not an angle: the top face is scaled by `(1 + taper)`, so `taper: Some(0.1)` is a 10% outward flare and `taper: Some(-0.2)` narrows it | FIXED 2026-08 — `height` is now honoured (previously the tapered solid was only 1 unit tall) |
 
 **Interference (2026-08):** evaluate_vehicle issues a warning “Interference: X overlaps Y (~N mm³)” whenever any two components’ meshes intersect (measured via a CSG intersection volume above a tiny epsilon, so merely-touching seams don’t count). Always resolve interference before marking a design done — move, shrink or remove one of the parts. Bolt-with-hole and shaft-with-bore connections that fit are NOT flagged, so a flagged pair is a real problem.
 

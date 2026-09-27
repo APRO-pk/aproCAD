@@ -13,25 +13,31 @@
 # function_calls, executes them against its own surface, and feeds the result
 # back via a follow-up complete().
 
-import sys, json, time
+import sys, json, os, time
 import needle
 
-# Cache one agent keyed by a fingerprint over the tool schemas (reuse across
-# turns as long as the toolset is unchanged).
+# Cache one agent keyed by a fingerprint over the tool schemas + weights path
+# (reuse across turns as long as the toolset and model are unchanged).
+#
+# NOTE: the engine keeps decode state between complete() calls, so a stale KV
+# cache bleeds into the next query (measured: 1/8 vs 6/8 correct). We therefore
+# reset before every completion unless the caller explicitly opts out.
 _agent = None
 _agent_key = None
 
-def get_agent(tools, key):
+def get_agent(tools, key, weights=None):
     global _agent, _agent_key
     if key == _agent_key and _agent is not None:
         return _agent
-    _agent = needle.Needle(tools=tools, system="device: desktop; locale: en-US")
+    _agent = needle.Needle(tools=tools, weights=weights,
+                           system="device: desktop; locale: en-US")
     _agent_key = key
     return _agent
 
-def fingerprint(tools):
+def fingerprint(tools, weights):
     import hashlib
-    return hashlib.sha256(json.dumps(tools, sort_keys=True).encode()).hexdigest()
+    payload = json.dumps(tools, sort_keys=True) + "|" + str(weights or "")
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 def main():
     for line in sys.stdin:
@@ -46,9 +52,10 @@ def main():
         rid = req.get("id")
         query = req.get("query", "")
         tools = req.get("tools", [])
-        reset = req.get("reset", False)
+        weights = req.get("weights") or os.environ.get("APRO_NEEDLE_WEIGHTS") or None
+        reset = req.get("reset", True)
         try:
-            agent = get_agent(tools, fingerprint(tools))
+            agent = get_agent(tools, fingerprint(tools, weights), weights)
             if reset:
                 agent.reset()
             t0 = time.time()

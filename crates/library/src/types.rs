@@ -11,6 +11,7 @@ pub enum EntryKind {
     FinSet,
     Transition,
     Solid,
+    Sketch,
     Assembly,
 }
 
@@ -24,6 +25,7 @@ impl EntryKind {
             EntryKind::FinSet => "FinSet",
             EntryKind::Transition => "Transition",
             EntryKind::Solid => "Solid",
+            EntryKind::Sketch => "Sketch",
             EntryKind::Assembly => "Assembly",
         }
     }

@@ -99,6 +99,10 @@ fn build_mesh(comp: &Component) -> Option<MeshData> {
         ComponentKind::Nozzle(p) => Some(nozzle_to_ops(p)),
         ComponentKind::FinSet(p) => return Some(mesh_finset(p)),
         ComponentKind::Solid(ops) => return evaluate_solid_ops(ops).ok(),
+        // A sketch is construction geometry and produces no mesh. Solid
+        // components that reference one are evaluated through the vehicle
+        // builder, which has the sibling registry this path lacks.
+        ComponentKind::Sketch(_) => return None,
     };
     match ops {
         Some(op_list) => evaluate_solid_ops(&op_list).ok(),

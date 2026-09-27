@@ -7,6 +7,7 @@ pub mod fin;
 pub mod vehicle;
 pub mod eval;
 pub mod shorthands;
+pub mod sketch;
 
 use truck_modeling::Solid;
 

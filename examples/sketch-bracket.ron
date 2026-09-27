@@ -1,0 +1,105 @@
+// Sketched bracket — exercises every sketch entity kind (Line, Rectangle,
+// Circle, Arc, Spline) across two workplanes.
+//
+//   Sketch1 (XY)   slots of Rectangle / Circle / Arc + Line → the plate
+//   Sketch2 (XZ)   Spline + Line outline → the upright web
+//   Plate  / Web   extrude those sketches by reference
+//
+// Sketch1 is a single closed region only because the compiler stitches the
+// separate arc and line entities end-to-end — nothing here shares a point
+// explicitly. Sketch2's spline outline is an open chain plus its closing line.
+Vehicle(
+    name: "SketchBracket",
+    units: Millimeters,
+    components: [
+        // --- plate outline: rounded ends built from two arcs and two lines ---
+        Component(
+            name: "Sketch1",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XY,
+                offset: 0.0,
+                entities: [
+                    Line(start: (20.0, 0.0), end: (80.0, 0.0)),
+                    Arc(center: (80.0, 20.0), radius: 20.0, start_angle: 4.71238898038469, end_angle: 1.5707963267948966),
+                    Line(start: (80.0, 40.0), end: (20.0, 40.0)),
+                    Arc(center: (20.0, 20.0), radius: 20.0, start_angle: 1.5707963267948966, end_angle: 4.71238898038469),
+                ],
+            )),
+        ),
+        Component(
+            name: "Plate",
+            material: "Al-6061-T6",
+            color: Some("#4f8bff"),
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(
+                    profile: Reference("Sketch1"),
+                    height: 10.0,
+                    direction: None,
+                    taper: None,
+                ),
+                // Inner loop of the obround: a bolt hole through the plate.
+                Hole(diameter: 8.0, depth: 10.0, axis: Z),
+            ]),
+        ),
+
+        // --- web outline on the XZ plane, standing up in Y ---
+        // Extruding a sketch already places the solid on its workplane, so this
+        // needs no TransformOp — adding one would move it twice.
+        Component(
+            name: "Sketch2",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XZ,
+                offset: 0.0,
+                entities: [
+                    Spline(points: [(20.0, 0.0), (35.0, 26.0), (65.0, 26.0), (80.0, 0.0)], closed: false),
+                    Line(start: (80.0, 0.0), end: (20.0, 0.0)),
+                ],
+            )),
+        ),
+        Component(
+            name: "Web",
+            material: "Al-6061-T6",
+            color: Some("#ff8f4f"),
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(
+                    profile: Reference("Sketch2"),
+                    height: 8.0,
+                    direction: None,
+                    taper: None,
+                ),
+            ]),
+        ),
+
+        // --- a second XY sketch on a lifted plane: circular boss ---
+        Component(
+            name: "Sketch3",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XY,
+                offset: 10.0,
+                entities: [
+                    Circle(center: (50.0, 20.0), radius: 12.0),
+                ],
+            )),
+        ),
+        Component(
+            name: "Boss",
+            material: "Al-6061-T6",
+            color: Some("#00e5b0"),
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(
+                    profile: Reference("Sketch3"),
+                    height: 6.0,
+                    direction: None,
+                    taper: None,
+                ),
+                Hole(diameter: 6.0, depth: 6.0, axis: Z),
+            ]),
+        ),
+    ],
+)

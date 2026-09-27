@@ -315,6 +315,16 @@ pub fn transform_mesh_srt(
 // Loft — direct mesh generation (bypasses B-Rep stitching limitation)
 // ---------------------------------------------------------------------------
 pub fn loft_mesh(profiles: &[Vec<[f64; 2]>]) -> std::result::Result<MeshData, KernelError> {
+    loft_mesh_spaced(profiles, 1.0)
+}
+
+/// Like [`loft_mesh`], but with an explicit Z distance between consecutive
+/// profiles. A tapered extrude uses `height` here so the lofted solid matches
+/// the requested extrusion length instead of always being one unit tall.
+pub fn loft_mesh_spaced(
+    profiles: &[Vec<[f64; 2]>],
+    z_spacing: f64,
+) -> std::result::Result<MeshData, KernelError> {
     if profiles.len() < 2 {
         return Err(KernelError("loft requires at least 2 profiles".into()));
     }
@@ -336,7 +346,7 @@ pub fn loft_mesh(profiles: &[Vec<[f64; 2]>]) -> std::result::Result<MeshData, Ke
         .map(|pts| dedup_profile(pts))
         .collect();
 
-    let z_spacing = 1.0; // spacing between profiles in Z
+    let z_spacing = z_spacing; // spacing between profiles in Z
 
     // Generate side triangles between each pair of adjacent profiles
     for pi in 0..profiles.len() - 1 {

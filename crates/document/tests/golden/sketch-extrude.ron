@@ -1,0 +1,37 @@
+// Sketches: a named 2D loop on a workplane, extruded by reference.
+//
+// The `Sketch1` component holds construction geometry only — it renders no
+// solid. `Plate` turns it into a part by referencing it from an Extrude.
+// Note `Sketch1` lists only `Rectangle` entities here, so the compiled profile
+// is a single closed region. Keep every Sketch's loops closed and disjoint.
+Vehicle(
+    name: "SketchPlate",
+    units: Millimeters,
+    components: [
+        Component(
+            name: "Sketch1",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XY,
+                offset: 0.0,
+                entities: [
+                    Rectangle(corner1: (0.0, 0.0), corner2: (80.0, 50.0)),
+                ],
+            )),
+        ),
+        Component(
+            name: "Plate",
+            material: "Al-6061-T6",
+            color: Some("#4f8bff"),
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(
+                    profile: Reference("Sketch1"),
+                    height: 8.0,
+                    direction: None,
+                    taper: None,
+                ),
+            ]),
+        ),
+    ],
+)

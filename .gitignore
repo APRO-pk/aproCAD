@@ -1,48 +1,118 @@
-# Build artifacts
-/target
+# =============================================================================
+# APRO CAD — .gitignore
+#
+# This repo tracks SOURCE, not build output or training data. A full working
+# tree is ~35 GB (mostly target/ + model checkpoints), so anything regenerable
+# is excluded here deliberately.
+#
+# Convention: an entry starting with "/" is anchored to the repo root. That
+# distinction matters below — the self-contained `needle-training/` bundle is
+# tracked, while root-level copies of the same generated data are not.
+# =============================================================================
 
-# Node / frontend build
+# ---------- Rust build output ----------
+# ~34 GB. Regenerate with `cargo build`.
+/target/
+**/*.rs.bk
+*.pdb
+
+# ---------- Cargo / Rust tooling ----------
+# Cargo.lock IS tracked on purpose: this repo ships binaries, so the lockfile
+# is what makes builds reproducible.
+
+# ---------- Node / frontend ----------
 node_modules/
 dist/
+.vite/
+*.tsbuildinfo
 
-# OS noise
-.DS_Store
-Thumbs.db
-desktop.ini
+# NOTE: src/vendor/ (three.js + addons) is intentionally TRACKED. The frontend
+# is bundler-free and loads them from an importmap, so they are runtime source.
 
-# Logs
-*.log
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Local env / secrets
-.env
-
-# Needle fine-tune artifacts (regenerate; do not commit) — root-level only
+# ---------- Needle model training artifacts ----------
+# Model weights and downloaded checkpoints: large binaries, regenerable.
+# `/my_needle.cact` is a built .cact model (tens of MB) — never commit it.
 /checkpoints/
 /my_needle.cact
-/train.log
-/train.err
+*.cact
+*.safetensors
+*.pt
+*.pth
 
-# Needle raw generated data + training logs at repo root (regenerable).
-# NOTE: root-anchored ("/") so the self-contained needle-training/ bundle,
-# which ships its own copies of the data, is still tracked.
+# Tool caches for the training pipeline.
+.cache/
+
+# Root-level copies of generated training data and the fine-tune logs.
+# Root-anchored ("/") so the curated, self-contained needle-training/ bundle
+# keeps its own committed copies in needle-training/data/.
 /generated_data.jsonl
 /needle_train_v2.jsonl
 /narrow_generated.jsonl
 /narrow_train.jsonl
 /seed_narrow.jsonl
+/train.log
+/train.err
 /ft.log
 /ft.err
 /ft2.log
 /ft2.err
 /ftn.log
 /ftn.err
+/ng.log
+/ng.err
 /run_ft.py
 /run_ftn.py
 /gen_seed_narrow.py
-/ng.log
-/ng.err
 
-# Python caches
-__pycache__/
-*.pyc
+# A nested duplicate working copy of the training bundle (its own venv,
+# checkpoints and caches — ~734 MB). Not source; it is a copy of the tracked
+# needle-training/ tree and must never be committed.
+needle-training/needle-training-new/
 
+# ---------- Logs ----------
+*.log
+*.err
+npm-debug.log*
+yarn-error.log*
+
+# ---------- Secrets / local config ----------
+# The app stores API keys in localStorage at runtime, never in the repo.
+# Keep it that way: no credentials, tokens or .env files belong here.
+.env
+.env.*
+!.env.example
+*.secret
+secrets.json
+
+# ---------- OS noise ----------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ---------- Editor / IDE ----------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+*~
+
+# ---------- Scratch files from local verification ----------
+*.tmp
+*.bak

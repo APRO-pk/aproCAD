@@ -1644,6 +1644,22 @@ body {
   padding: 10px 16px; border-top: 1px solid var(--edge);
   display: flex; justify-content: flex-end; gap: 6px;
 }
+.needle-row { display: flex; gap: 6px; }
+.needle-row input { flex: 1; min-width: 0; }
+.needle-row .tb-btn { flex: none; white-space: nowrap; }
+.needle-hint {
+  font-size: 10px; line-height: 1.5; color: var(--ink-dim);
+  font-family: var(--font-sans); margin-top: 2px;
+}
+#needle-status.ok { color: var(--green, #4ade80); border-color: var(--green, #4ade80); }
+#needle-status.err { color: var(--red, #f87171); border-color: var(--red, #f87171); }
+.needle-check {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px !important; font-weight: 500 !important;
+  text-transform: none !important; letter-spacing: 0 !important;
+  color: var(--ink) !important; cursor: pointer;
+}
+.needle-check input { accent-color: var(--violet); width: 13px; height: 13px; }
 
 /* Shortcuts modal */
 #ux-shortcuts-modal {
@@ -1691,6 +1707,59 @@ body {
 @media (max-width: 900px) {
   #editor-panel { width: 300px; min-width: 200px; }
 }
+
+/* ===== 2D Sketch mode =====
+   The three.js overlay is drawn by sketcher.js; these are the only DOM pieces:
+   a status banner, the two cursor-following readouts, and the plane/Finish
+   control. All colours come from the shared design tokens. */
+.sk-banner {
+  position: absolute; left: 12px; bottom: 12px; z-index: 6; max-width: 62%;
+  background: var(--glass); border: 1px solid var(--teal-glow);
+  border-radius: var(--r-md); padding: 6px 11px;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-2);
+  font-family: var(--font-ui); font-size: 9.5px; color: var(--ink);
+  pointer-events: none; animation: fadeIn 200ms var(--ease-out);
+}
+.sk-banner .sk-hints {
+  margin-top: 3px; color: var(--ink-faint);
+  font-family: var(--font-mono); font-size: 8.5px;
+}
+
+/* Cursor-following readouts (live dimensions, snap name) */
+.sk-dim, .sk-snap-label {
+  position: absolute; z-index: 7; pointer-events: none; white-space: nowrap;
+  background: var(--glass-strong); border: 1px solid var(--edge);
+  border-radius: var(--r-sm); padding: 4px 9px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink);
+  box-shadow: var(--shadow-1);
+}
+.sk-dim { transform: translate(12px, 16px); }
+.sk-snap-label {
+  transform: translate(12px, -26px); color: var(--teal);
+  border-color: var(--teal-glow);
+}
+
+/* Plane chooser + Finish / Cancel, bottom-centre of the viewport */
+.sk-panel {
+  position: absolute; left: 50%; bottom: 58px; transform: translateX(-50%);
+  z-index: 7; align-items: center; gap: 4px;
+  background: var(--glass); border: 1px solid var(--edge);
+  border-radius: var(--r-pill); padding: 4px 6px;
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-2); animation: slideUp 320ms var(--ease-out);
+}
+.sk-panel-label {
+  font-size: 9px; color: var(--ink-faint); padding: 0 6px;
+  font-family: var(--font-ui);
+}
+.sk-plane-btn { min-width: 30px; }
+.sk-plane-btn.active {
+  color: var(--teal); background: var(--teal-dim);
+  box-shadow: inset 0 0 0 1px var(--teal-glow);
+}
+.sk-finish { color: var(--teal); }
+.sk-cancel:hover { color: var(--rose); background: var(--rose-dim); }
 
 /* ===== Reduced motion respect ===== */
 @media (prefers-reduced-motion: reduce) {

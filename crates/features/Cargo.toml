@@ -9,3 +9,6 @@ apro-kernel = { path = "../kernel" }
 apro-document = { path = "../document" }
 truck-modeling = "0.6"
 serde = { version = "1", features = ["serde_derive"] }
+
+[dev-dependencies]
+ron = "0.8"

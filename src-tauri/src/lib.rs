@@ -2,7 +2,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
 use apro_document::vehicle::{Component, ComponentKind, Issue, IssueSeverity, Vehicle,
-    NoseConeProfile, DomeKind, Transform, SolidOp, Profile};
+    NoseConeProfile, DomeKind, Transform, SolidOp, Profile, SketchPlane, SketchEntity};
 use apro_document::patch::{Patch, PatchResult, apply_patch};
 use apro_document::validation::{validate_component, validate_vehicle};
 use apro_massprops::{compute_mass_properties, MassProperties};
@@ -134,6 +134,9 @@ fn mesh_component(kind: &ComponentKind) -> Option<MeshData> {
         ComponentKind::Nozzle(p) => Some(nozzle_to_ops(p)),
         ComponentKind::FinSet(p) => return Some(mesh_finset(p)),
         ComponentKind::Solid(ops) => return evaluate_solid_ops(ops).ok(),
+        // Sketches are construction geometry; only the vehicle builder, which
+        // can see sibling sketches, turns them into solids.
+        ComponentKind::Sketch(_) => return None,
     };
     match ops {
         Some(op_list) => evaluate_solid_ops(&op_list).ok(),
@@ -166,6 +169,7 @@ fn component_type_name(kind: &ComponentKind) -> &str {
         ComponentKind::Nozzle(_) => "Nozzle",
         ComponentKind::FinSet(_) => "FinSet",
         ComponentKind::Solid(_) => "Solid",
+        ComponentKind::Sketch(_) => "Sketch",
     }
 }
 
@@ -327,6 +331,24 @@ fn describe_kind(kind: &ComponentKind) -> Vec<PropertyRow> {
                         r.push(float_row(&format!("op_{}_depth", i), *depth));
                     }
                 }
+            }
+            r
+        }
+        ComponentKind::Sketch(s) => {
+            let mut r = vec![
+                string_row("plane", &format!("{:?}", s.plane)),
+                float_row("offset", s.offset),
+                int_row("entity_count", s.entities.len() as u32),
+            ];
+            for (i, e) in s.entities.iter().enumerate() {
+                let label = match e {
+                    SketchEntity::Line { .. } => "line",
+                    SketchEntity::Rectangle { .. } => "rectangle",
+                    SketchEntity::Circle { .. } => "circle",
+                    SketchEntity::Arc { .. } => "arc",
+                    SketchEntity::Spline { .. } => "spline",
+                };
+                r.push(string_row(&format!("entity_{}", i), label));
             }
             r
         }
@@ -528,6 +550,19 @@ fn modify_component_kind(kind: &mut ComponentKind, key: &str, value: &str) -> Re
                 _ => Err("Editing of this op not supported via property table".into()),
             }
         }
+        ComponentKind::Sketch(s) => match key {
+            "plane" => {
+                s.plane = match value.trim() {
+                    "XY" | "xy" => SketchPlane::XY,
+                    "XZ" | "xz" => SketchPlane::XZ,
+                    "YZ" | "yz" => SketchPlane::YZ,
+                    other => return Err(format!("unknown sketch plane: {}", other)),
+                };
+                Ok(())
+            }
+            "offset" => { s.offset = parse_f64(value)?; Ok(()) }
+            _ => Err("Sketch entities are edited in the RON editor, not the property table".into()),
+        },
     }
 }
 
@@ -712,15 +747,42 @@ fn check_interferences(
 fn needle_run(
     query: String,
     tools: Vec<serde_json::Value>,
+    weights: Option<String>,
     reset: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let req = crate::needle::NeedleRequest {
         query,
         tools,
-        reset: reset.unwrap_or(false),
+        weights,
+        reset: reset.unwrap_or(true),
     };
     crate::needle::needle_run_impl(&state.needle, &req)
+}
+
+/// The exact narrow tool schema the local Needle model was trained on. Must be
+/// served byte-for-byte: the model memorised this tool block, so re-describing
+/// the same tools degrades it sharply (measured 6/8 -> 1/8).
+const NEEDLE_TOOLS_NARROW: &str = include_str!("../needle_tools_narrow.json");
+
+#[tauri::command]
+fn get_needle_schema() -> Result<Vec<serde_json::Value>, String> {
+    serde_json::from_str(NEEDLE_TOOLS_NARROW)
+        .map_err(|e| format!("embedded needle schema is invalid: {e}"))
+}
+
+/// Native open-file dialog; returns the chosen path (None when cancelled).
+#[tauri::command]
+fn pick_file_dialog(
+    filter_name: String,
+    extensions: Vec<String>,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new();
+    let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    if !exts.is_empty() {
+        dialog = dialog.add_filter(&filter_name, &exts);
+    }
+    Ok(dialog.pick_file().map(|p| p.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -778,6 +840,7 @@ fn export_step(vehicle_ron: String, path: String) -> Result<String, String> {
         ComponentKind::Nozzle(p) => apro_features::BuildSolid::build(p),
         ComponentKind::FinSet(_) => return Err("STEP export not yet supported for fin sets".into()),
         ComponentKind::Solid(_) => return Err("STEP export not yet supported for Solid kind (mesh-only pipeline)".into()),
+        ComponentKind::Sketch(_) => return Err("STEP export not supported for sketches (construction geometry)".into()),
     };
     write_step(&solid, &file_path)?;
     Ok(format!("STEP exported to {}", file_path.display()))
@@ -867,6 +930,7 @@ fn library_retrieve(
             "FinSet" => Some(apro_library::EntryKind::FinSet),
             "Transition" => Some(apro_library::EntryKind::Transition),
             "Solid" => Some(apro_library::EntryKind::Solid),
+            "Sketch" => Some(apro_library::EntryKind::Sketch),
             _ => None,
         }),
         od_mm,
@@ -1080,7 +1144,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file, check_interferences, needle_run])
+        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file, check_interferences, needle_run, get_needle_schema, pick_file_dialog])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

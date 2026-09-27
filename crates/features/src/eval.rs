@@ -1,4 +1,4 @@
-use apro_document::vehicle::{SolidOp, Profile, Path3D, Axis, Direction, SolidRef, BooleanKind};
+use apro_document::vehicle::{SolidOp, Profile, Path3D, Axis, Direction, SolidRef, BooleanKind, SketchPlane};
 use apro_document::params::ParamEnv;
 use apro_kernel::{transform_mesh, MeshData};
 use apro_kernel::backend::{ShapeBackend, TruckBackend};
@@ -9,11 +9,106 @@ use std::sync::OnceLock;
 static TRUCK_BACKEND: OnceLock<TruckBackend> = OnceLock::new();
 fn backend() -> &'static TruckBackend { TRUCK_BACKEND.get_or_init(TruckBackend::new) }
 
+/// A sketch resolved into the pieces an op needs: its plane-local 2D loop plus
+/// the workplane placement a resulting mesh must be moved by.
+#[derive(Debug, Clone)]
+pub struct ResolvedSketch {
+    pub loop_pts: Vec<[f64; 2]>,
+    pub plane: SketchPlane,
+    pub origin: apro_document::vehicle::Vec3,
+}
+
+/// Looks a named sketch up by component name. Returns an error string when the
+/// name is unknown or the sketch does not form a single closed region.
+pub type SketchLookup<'a> = &'a mut dyn FnMut(&str) -> Result<ResolvedSketch, String>;
+
+/// Reject-all lookup, for stacks evaluated outside a vehicle (no siblings).
+fn no_sketches(name: &str) -> Result<ResolvedSketch, String> {
+    Err(format!("sketch '{name}' cannot be resolved outside a vehicle"))
+}
+
 /// Expand any Profile variant into a concrete 2D point list. `env` supplies
 /// named parameters; `Profile::UserFunction` evaluates its `expr` against the
 /// environment plus the free `variable` sampled across `range`.
 pub fn expand_profile(profile: &Profile, samples: u32, env: &ParamEnv) -> Result<Vec<[f64; 2]>, String> {
+    expand_profile_with(profile, samples, env, &mut no_sketches)
+}
+
+/// Like [`expand_profile`], but resolves `Profile::Reference` against a sketch
+/// registry.
+pub fn expand_profile_with(
+    profile: &Profile,
+    samples: u32,
+    env: &ParamEnv,
+    lookup: SketchLookup,
+) -> Result<Vec<[f64; 2]>, String> {
     match profile {
+        Profile::Reference(name) => Ok(lookup(name)?.loop_pts),
+        Profile::PlacedReference { sketch, origin, plane } => {
+            // The plane and origin are inlined, so this resolves without a
+            // registry — useful for self-contained documents and previews.
+            let _ = (origin, plane);
+            Ok(lookup(sketch)?.loop_pts)
+        }
+        _ => expand_profile_inner(profile, samples, env),
+    }
+}
+
+/// Resolve a profile into its 2D loop plus the workplane placement that the
+/// resulting mesh must be moved by. Placement is `None` for every profile that
+/// is already authored in op-local coordinates.
+fn resolve_profile(
+    profile: &Profile,
+    samples: u32,
+    env: &ParamEnv,
+    lookup: SketchLookup,
+) -> Result<(Vec<[f64; 2]>, Option<(SketchPlane, apro_document::vehicle::Vec3)>), String> {
+    match profile {
+        Profile::Points(_)
+        | Profile::Circle { .. }
+        | Profile::Rectangle { .. }
+        | Profile::Polygon { .. }
+        | Profile::UserFunction { .. } => Ok((expand_profile(profile, samples, env)?, None)),
+        Profile::PlacedReference { sketch, origin, plane } => {
+            // The plane placement is inlined, so the loop stays local and the
+            // placement rides along to be applied after the op runs.
+            let resolved = lookup(sketch)?;
+            Ok((resolved.loop_pts, Some((*plane, *origin))))
+        }
+        Profile::Reference(name) => {
+            let resolved = lookup(name)?;
+            Ok((resolved.loop_pts, Some((resolved.plane, resolved.origin))))
+        }
+    }
+}
+
+/// Move a mesh produced from a sketch-plane profile into world space.
+///
+/// The kernel always extrudes/revolves about the local +Z axis from Z=0, so a
+/// sketch on another plane is handled by rotating that local frame onto the
+/// plane (a quarter turn about the shared world axis) and translating to the
+/// plane origin. Extrusion length is already baked into the mesh, so the only
+/// translation applied here is the sketch's own plane offset.
+pub fn place_mesh_on_plane(
+    mesh: &MeshData,
+    plane: SketchPlane,
+    origin: apro_document::vehicle::Vec3,
+) -> MeshData {
+    let t = [origin.0, origin.1, origin.2];
+    let rot = match plane {
+        SketchPlane::XY => [0.0, 0.0, 0.0],
+        SketchPlane::XZ => [90.0, 0.0, 0.0],
+        SketchPlane::YZ => [0.0, 90.0, 0.0],
+    };
+    transform_mesh(mesh, &t, &rot)
+}
+
+fn expand_profile_inner(profile: &Profile, samples: u32, env: &ParamEnv) -> Result<Vec<[f64; 2]>, String> {
+    match profile {
+        // Resolved by `expand_profile_with` before this point; reaching here
+        // means the caller bypassed the sketch registry.
+        Profile::Reference(name) => Err(format!("sketch reference '{name}' was not resolved")),
+        Profile::PlacedReference { .. } => Err("placed sketch reference was not resolved".into()),
         Profile::Points(pts) => Ok(pts.clone()),
         Profile::Rectangle { width, height, corner_radius } => {
             let w = *width;
@@ -78,9 +173,6 @@ pub fn expand_profile(profile: &Profile, samples: u32, env: &ParamEnv) -> Result
                 })
                 .collect();
             Ok(pts)
-        }
-        Profile::Reference(name) => {
-            Err(format!("profile reference '{name}' not yet supported — expand manually"))
         }
         Profile::UserFunction { expr, variable, range, samples: s } => {
             let n = (*s).max(2) as usize;
@@ -204,7 +296,7 @@ fn catmull_rom_point(p0:[f64;3],p1:[f64;3],p2:[f64;3],p3:[f64;3],t:f64)->[f64;3]
 /// 4. Boolean combines the current mesh with another component's mesh (or itself).
 /// 5. Blocked ops (shell, fillet, chamfer) return an error.
 pub fn evaluate_solid_ops(ops: &[SolidOp]) -> Result<MeshData, String> {
-    evaluate_solid_ops_with(ops, &ParamEnv::new(), &mut |name: &str| -> Result<MeshData, String> {
+    evaluate_solid_ops_full(ops, &ParamEnv::new(), &mut no_sketches, &mut |name: &str| -> Result<MeshData, String> {
         Err(format!("boolean target component '{name}' cannot be resolved outside a vehicle"))
     })
 }
@@ -218,6 +310,17 @@ pub fn evaluate_solid_ops_with(
     params: &ParamEnv,
     resolve_component: &mut dyn FnMut(&str) -> Result<MeshData, String>,
 ) -> Result<MeshData, String> {
+    evaluate_solid_ops_full(ops, params, &mut no_sketches, resolve_component)
+}
+
+/// Full evaluator: parameter environment, a sketch registry for
+/// `Profile::Reference`, and sibling-component resolution for booleans.
+pub fn evaluate_solid_ops_full(
+    ops: &[SolidOp],
+    params: &ParamEnv,
+    resolve_sketch: SketchLookup,
+    resolve_component: &mut dyn FnMut(&str) -> Result<MeshData, String>,
+) -> Result<MeshData, String> {
     if ops.is_empty() {
         return Err("solid op stack is empty".into());
     }
@@ -227,26 +330,30 @@ pub fn evaluate_solid_ops_with(
     for op in ops {
         match op {
             SolidOp::Revolve { profile, angle, axis } => {
-                let pts = expand_profile(profile, 24, params)?;
-                if let Some(ax) = axis {
+                let (pts, placement) = resolve_profile(profile, 24, params, resolve_sketch)?;
+                let mut mesh = if let Some(ax) = axis {
                     match ax {
                         Axis::X => {
                             // revolve_mesh puts axial along Z; rotate Z -> X
-                            let mesh = backend().revolve_mesh(&pts, *angle);
-                            current_mesh = Some(transform_mesh(&mesh, &[0.0, 0.0, 0.0], &[0.0, 90.0, 0.0]));
+                            let m = backend().revolve_mesh(&pts, *angle);
+                            transform_mesh(&m, &[0.0, 0.0, 0.0], &[0.0, 90.0, 0.0])
                         }
                         Axis::Y => {
                             // revolve_mesh puts axial along Z; rotate Z -> Y
-                            let mesh = backend().revolve_mesh(&pts, *angle);
-                            current_mesh = Some(transform_mesh(&mesh, &[0.0, 0.0, 0.0], &[-90.0, 0.0, 0.0]));
+                            let m = backend().revolve_mesh(&pts, *angle);
+                            transform_mesh(&m, &[0.0, 0.0, 0.0], &[-90.0, 0.0, 0.0])
                         }
-                        Axis::Z => {
-                            current_mesh = Some(backend().revolve_mesh(&pts, *angle));
-                        }
+                        Axis::Z => backend().revolve_mesh(&pts, *angle),
                     }
                 } else {
-                    current_mesh = Some(backend().revolve_mesh(&pts, *angle));
+                    backend().revolve_mesh(&pts, *angle)
+                };
+                if let Some((plane, origin)) = placement {
+                    // A sketch-plane revolve needs no extra lift along the
+                    // normal; the rotation itself carries it to the plane.
+                    mesh = place_mesh_on_plane(&mesh, plane, origin);
                 }
+                current_mesh = Some(mesh);
             }
 
             SolidOp::Boolean { kind, target } => {
@@ -288,51 +395,44 @@ pub fn evaluate_solid_ops_with(
             }
 
             SolidOp::Extrude { profile, height, direction, taper } => {
-                let pts = expand_profile(profile, 24, params)?;
-                if let Some(d) = direction {
-                    let mesh = match d {
-                        Direction::PosZ | Direction::NegZ => {
-                            let h = if matches!(d, Direction::NegZ) { -*height } else { *height };
-                            backend().extrude_mesh(&pts, h)
-                                .map_err(|e| format!("extrude failed: {e}"))?
-                        }
-                        _ => {
-                            // For non-Z directions, extrude along Z then rotate mesh
-                            let mesh = backend().extrude_mesh(&pts, *height)
-                                .map_err(|e| format!("extrude failed: {e}"))?;
-                            let (rx, ry, rz) = match d {
-                                Direction::PosX => (0.0, -90.0, 0.0),
-                                Direction::NegX => (0.0, 90.0, 0.0),
-                                Direction::PosY => (90.0, 0.0, 0.0),
-                                Direction::NegY => (-90.0, 0.0, 0.0),
-                                _ => unreachable!(),
-                            };
-                            current_mesh = Some(transform_mesh(&mesh, &[0.0, 0.0, 0.0], &[rx, ry, rz]));
-                            continue;
-                        }
-                    };
-                    if let Some(t) = taper {
-                        // Simple taper: scale the top face by interpolating with a linear profile
-                        let base_pts = expand_profile(profile, 24, params)?;
-                        let top_pts: Vec<[f64; 2]> = base_pts.iter()
+                let (pts, placement) = resolve_profile(profile, 24, params, resolve_sketch)?;
+
+                // Direction resolves to (rotation that carries the local +Z
+                // extrusion onto the requested axis, sign of the height).
+                let (rot, sign) = match direction {
+                    None | Some(Direction::PosZ) => ([0.0, 0.0, 0.0], 1.0),
+                    Some(Direction::NegZ) => ([0.0, 0.0, 0.0], -1.0),
+                    Some(Direction::PosX) => ([0.0, -90.0, 0.0], 1.0),
+                    Some(Direction::NegX) => ([0.0, 90.0, 0.0], 1.0),
+                    Some(Direction::PosY) => ([90.0, 0.0, 0.0], 1.0),
+                    Some(Direction::NegY) => ([-90.0, 0.0, 0.0], 1.0),
+                };
+
+                let mut mesh = match taper {
+                    None => backend()
+                        .extrude_mesh(&pts, sign * height)
+                        .map_err(|e| format!("extrude failed: {e}"))?,
+                    Some(t) => {
+                        // Tapered extrude as a ruled loft. `loft_mesh_spaced`
+                        // places the second profile `height` away, so the solid
+                        // reaches the requested length.
+                        let top_pts: Vec<[f64; 2]> = pts
+                            .iter()
                             .map(|&[x, y]| [x * (1.0 + t), y * (1.0 + t)])
                             .collect();
-                        // loft_mesh places profiles at Z=0 and Z=1; scaling unaffected
-                        let bottom: Vec<[f64; 2]> = base_pts.iter()
-                            .map(|&[x, y]| [x, y])
-                            .collect();
-                        // Use loft_mesh for tapered extrude
-                        let mesh = backend().loft_mesh(&[bottom, top_pts])
-                            .map_err(|e| format!("tapered extrude loft failed: {e}"))?;
-                        current_mesh = Some(mesh);
-                        continue;
+                        backend()
+                            .loft_mesh_spaced(&[pts.clone(), top_pts], sign * height)
+                            .map_err(|e| format!("tapered extrude loft failed: {e}"))?
                     }
-                    current_mesh = Some(mesh);
-                } else {
-                    let mesh = backend().extrude_mesh(&pts, *height)
-                        .map_err(|e| format!("extrude failed: {e}"))?;
-                    current_mesh = Some(mesh);
+                };
+
+                if rot != [0.0, 0.0, 0.0] {
+                    mesh = transform_mesh(&mesh, &[0.0, 0.0, 0.0], &rot);
                 }
+                if let Some((plane, origin)) = placement {
+                    mesh = place_mesh_on_plane(&mesh, plane, origin);
+                }
+                current_mesh = Some(mesh);
             }
 
             SolidOp::Loft { profiles, guide_curves: _ } => {
@@ -341,16 +441,15 @@ pub fn evaluate_solid_ops_with(
                 }
                 let mut pts_list = Vec::new();
                 for p in profiles {
-                    let pts = expand_profile(p, 24, params)?;
+                    let (pts, _) = resolve_profile(p, 24, params, resolve_sketch)?;
                     pts_list.push(pts);
-                }
-                let mesh = backend().loft_mesh(&pts_list)
+                }                let mesh = backend().loft_mesh(&pts_list)
                     .map_err(|e| format!("loft failed: {e}"))?;
                 current_mesh = Some(mesh);
             }
 
             SolidOp::Sweep { profile, path, twist: _ } => {
-                let pts = expand_profile(profile, 24, params)?;
+                let (pts, _) = resolve_profile(profile, 24, params, resolve_sketch)?;
                 let path_pts = convert_path(path, 24)?;
                 let mesh = backend().sweep_mesh(&pts, &path_pts)
                     .map_err(|e| format!("sweep failed: {e}"))?;

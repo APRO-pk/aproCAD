@@ -95,6 +95,12 @@ pub fn extract_params(comp: &Component, mass: Option<f64>) -> ParamVector {
                 ..Default::default()
             }
         }
+        // Sketches carry no solid dimensions; their entities are described by
+        // the sketch itself rather than by an OD/length pair.
+        ComponentKind::Sketch(_) => ParamVector {
+            material: Some(comp.material_name()),
+            ..Default::default()
+        },
     };
     let mut v = kind;
     v.mass_g = mass;
@@ -167,6 +173,7 @@ pub fn kind_of(comp: &Component) -> EntryKind {
         ComponentKind::Nozzle(_) => EntryKind::Nozzle,
         ComponentKind::FinSet(_) => EntryKind::FinSet,
         ComponentKind::Solid(_) => EntryKind::Solid,
+        ComponentKind::Sketch(_) => EntryKind::Sketch,
     }
 }
 

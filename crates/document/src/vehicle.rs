@@ -79,6 +79,7 @@ impl Component {
             ComponentKind::Nozzle(p) => p.material.clone(),
             ComponentKind::FinSet(p) => p.material.clone(),
             ComponentKind::Solid(_) => "Steel-4130".into(),
+            ComponentKind::Sketch(_) => String::new(),
         }
     }
 }
@@ -99,6 +100,10 @@ pub enum ComponentKind {
     Tank(TankParams),
     /// General-purpose solid defined by an operation stack.
     Solid(Vec<SolidOp>),
+    /// A 2D sketch on a workplane. Evaluates to no renderable mesh on its own;
+    /// reference it from `Profile::Reference` inside an Extrude/Revolve/Loft to
+    /// turn it into a solid.
+    Sketch(SketchParams),
 }
 
 // ---------------------------------------------------------------------------
@@ -206,8 +211,92 @@ pub enum Profile {
     Circle { radius: f64 },
     Rectangle { width: f64, height: f64, corner_radius: Option<f64> },
     Polygon { sides: u32, circumradius: f64 },
+    /// A 2D loop produced by a `Sketch` component (possibly transformed into a
+    /// local extrusion frame). Resolved against the sibling sketch registry
+    /// when the stack is evaluated.
     Reference(String),
+    /// A placed sketch plane: the resolved loop in the plane's own 2D frame,
+    /// bundled with the workspace transform that puts an extrusion off that
+    /// plane back into place. Produced by [`SketchPlane::placed_profile`];
+    /// authored output should normally use `Reference` instead.
+    PlacedReference { sketch: String, origin: Vec3, plane: SketchPlane },
     UserFunction { expr: String, variable: String, range: [f64; 2], samples: u32 },
+}
+
+// ---------------------------------------------------------------------------
+// Sketch – 2D entities drawn on a workplane
+// ---------------------------------------------------------------------------
+/// The workplane a sketch is drawn on. Local 2D coordinates are `(u, v)`;
+/// the 3D frame (used to place an extrusion back into space) is:
+///   XY -> u = +X, v = +Y, normal = +Z   (default, matches the extrude axis)
+///   XZ -> u = +X, v = +Z, normal = -Y
+///   YZ -> u = +Y, v = +Z, normal = +X
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub enum SketchPlane {
+    XY,
+    XZ,
+    YZ,
+}
+
+impl Default for SketchPlane {
+    fn default() -> Self { SketchPlane::XY }
+}
+
+impl SketchPlane {
+    /// Orthonormal frame `(u_axis, v_axis, normal)` in world space.
+    pub fn basis(&self) -> ([f64; 3], [f64; 3], [f64; 3]) {
+        match self {
+            SketchPlane::XY => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+            SketchPlane::XZ => ([1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]),
+            SketchPlane::YZ => ([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]),
+        }
+    }
+
+    /// Place a plane-local 2D point into world space.
+    pub fn to_world(&self, uv: [f64; 2], origin: Vec3) -> [f64; 3] {
+        let (u, v, _) = self.basis();
+        [
+            origin.0 + u[0] * uv[0] + v[0] * uv[1],
+            origin.1 + u[1] * uv[0] + v[1] * uv[1],
+            origin.2 + u[2] * uv[0] + v[2] * uv[1],
+        ]
+    }
+
+    /// World-space origin of the plane at `offset` along its normal.
+    pub fn origin_at(&self, offset: f64) -> Vec3 {
+        let (_, _, n) = self.basis();
+        (n[0] * offset, n[1] * offset, n[2] * offset)
+    }
+}
+
+/// One 2D sketch entity, in the plane's local `(u, v)` coordinates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub enum SketchEntity {
+    /// A single straight segment.
+    Line { start: [f64; 2], end: [f64; 2] },
+    /// An axis-aligned rectangle spanning two opposite corners.
+    Rectangle { corner1: [f64; 2], corner2: [f64; 2] },
+    /// A full circle.
+    Circle { center: [f64; 2], radius: f64 },
+    /// A circular arc from `start_angle` to `end_angle` (radians, CCW positive).
+    Arc { center: [f64; 2], radius: f64, start_angle: f64, end_angle: f64 },
+    /// A Catmull-Rom spline passing through every point. Set `closed` to join
+    /// the last point back to the first.
+    Spline { points: Vec<[f64; 2]>, closed: bool },
+}
+
+/// A named 2D sketch drawn on a workplane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
+pub struct SketchParams {
+    /// Plane the sketch is drawn on. Defaults to XY.
+    #[serde(default)]
+    pub plane: SketchPlane,
+    /// Offset of the plane's origin along its normal. Lets several sketches
+    /// share a plane orientation at different heights.
+    #[serde(default)]
+    pub offset: f64,
+    /// Entities in draw order. Loops are stitched geometrically, not by order.
+    pub entities: Vec<SketchEntity>,
 }
 
 // ---------------------------------------------------------------------------

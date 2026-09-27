@@ -12,7 +12,7 @@
 
 use crate::csg::mesh_boolean;
 use crate::mesh::MeshData;
-use crate::ops::{extrude, loft_mesh, revolve_mesh, sweep, tessellate, BooleanKind};
+use crate::ops::{extrude, loft_mesh, loft_mesh_spaced, revolve_mesh, sweep, tessellate, BooleanKind};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EdgeSel {
@@ -28,6 +28,9 @@ pub trait ShapeBackend {
     fn revolve_mesh(&self, profile: &[[f64; 2]], angle_deg: f64) -> MeshData;
     fn extrude_mesh(&self, profile: &[[f64; 2]], height: f64) -> Result<MeshData, String>;
     fn loft_mesh(&self, profiles: &[Vec<[f64; 2]>]) -> Result<MeshData, String>;
+    /// Loft with an explicit Z distance between successive profiles. Used by
+    /// the tapered-extrude path so the solid reaches the requested height.
+    fn loft_mesh_spaced(&self, profiles: &[Vec<[f64; 2]>], z_spacing: f64) -> Result<MeshData, String>;
     fn sweep_mesh(&self, profile: &[[f64; 2]], path_points: &[[f64; 3]]) -> Result<MeshData, String>;
     fn boolean(&self, base: &MeshData, tool: &MeshData, kind: BooleanKind) -> Result<MeshData, String>;
 
@@ -89,6 +92,10 @@ impl ShapeBackend for TruckBackend {
 
     fn loft_mesh(&self, profiles: &[Vec<[f64; 2]>]) -> Result<MeshData, String> {
         Ok(loft_mesh(profiles).map_err(|e| e.0)?)
+    }
+
+    fn loft_mesh_spaced(&self, profiles: &[Vec<[f64; 2]>], z_spacing: f64) -> Result<MeshData, String> {
+        Ok(loft_mesh_spaced(profiles, z_spacing).map_err(|e| e.0)?)
     }
 
     fn sweep_mesh(&self, profile: &[[f64; 2]], path_points: &[[f64; 3]]) -> Result<MeshData, String> {

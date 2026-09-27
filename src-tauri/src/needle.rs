@@ -14,12 +14,22 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Mutex;
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NeedleRequest {
     pub query: String,
     /// JSON schemas describing the available tools (Needle's `tools` param).
     pub tools: Vec<serde_json::Value>,
+    /// Path to a tuned `.cact` archive; omit for the base model.
     #[serde(default)]
+    pub weights: Option<String>,
+    /// Reset the engine's decode state before this turn. The engine keeps KV
+    /// state between calls, so a stale cache bleeds into the next query
+    /// (measured: 1/8 vs 6/8 correct), hence default true.
+    #[serde(default = "default_true")]
     pub reset: bool,
 }
 
@@ -70,6 +80,7 @@ impl NeedleWorker {
             "id": id,
             "query": req.query,
             "tools": req.tools,
+            "weights": req.weights,
             "reset": req.reset,
         });
         let mut text = serde_json::to_string(&line).map_err(|e| e.to_string())?;

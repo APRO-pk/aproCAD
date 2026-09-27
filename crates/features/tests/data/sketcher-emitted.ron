@@ -1,0 +1,30 @@
+// my part
+Vehicle(
+    name: "Vehicle",
+    units: Millimeters,
+    components: [
+        Component(
+            name: "Block",
+            material: "Al-6061-T6",
+            transform: (position: (0.0, 0.0, 0.0), rotation: (0.0, 0.0, 0.0)),
+            kind: Solid([
+                Extrude(profile: Rectangle(width: 60.0, height: 60.0, corner_radius: None), height: 20.0, direction: None, taper: None),
+            ]),
+        ),
+        Component(
+            name: "Sketch1",
+            material: "",
+            kind: Sketch(SketchParams(
+                plane: XZ,
+                offset: 5.0,
+                entities: [
+                    Line(start: (0.0, 0.0), end: (60.0, 0.0)),
+                    Rectangle(corner1: (0.0, 0.0), corner2: (10.0, 5.0)),
+                    Circle(center: (20.0, 20.0), radius: 7.5),
+                    Arc(center: (0.0, 0.0), radius: 10.0, start_angle: 0.0, end_angle: 1.5708),
+                    Spline(points: [(0.0, 0.0), (5.0, 8.0), (10.0, 0.0)], closed: false),
+                ],
+            )),
+        ),
+    ],
+)
