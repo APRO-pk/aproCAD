@@ -874,8 +874,9 @@ function updateStats(result) {
 }
 
 // ===== Evaluate =====
-// Temporary scene diagnostics (flip to false once rendering issues are resolved)
-const SCENE_DEBUG = true;
+// Verbose scene diagnostics are opt-in (see the boot script in index.html):
+// the caller runs on every frame, so this must default to off.
+const SCENE_DEBUG = !!window.__debug;
 function debugSceneState(tag) {
   if (!SCENE_DEBUG) return;
   const cam = camera;
@@ -926,41 +927,54 @@ function bindEvalProgressEvents() {
 
 let evalShownAt = 0;
 
-function showEvalProgress(total) {
+function showEvalProgress() {
   const wrap = document.getElementById('eval-progress');
   const fill = document.getElementById('ep-fill');
+  const pct = document.getElementById('ep-pct');
   const label = document.getElementById('ep-label');
+  const title = document.getElementById('ep-title');
   if (!wrap) return;
   evalShownAt = performance.now();
   wrap.classList.remove('indeterminate');
-  wrap.style.display = 'block';
-  // Two-phase stream: total steps = 2 × components (tessellate + assemble).
-  fill.style.width = '2%';
-  label.textContent = 'Evaluating…';
+  wrap.style.display = 'flex';
+  if (fill) fill.style.width = '2%';
+  if (pct) pct.textContent = '0%';
+  if (label) label.textContent = 'Preparing…';
+  if (title) title.textContent = 'Evaluating';
 }
 
 function setEvalProgress(phase, done, total, current) {
   const wrap = document.getElementById('eval-progress');
   const fill = document.getElementById('ep-fill');
+  const pct = document.getElementById('ep-pct');
   const label = document.getElementById('ep-label');
+  const title = document.getElementById('ep-title');
   if (!wrap || !fill) return;
   wrap.classList.remove('indeterminate');
-  wrap.style.display = 'block';
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
-  fill.style.width = pct + '%';
-  const verb = phase === 'assemble' ? 'Assembling' : 'Tessellating';
-  label.textContent = `${verb} ${current} (${done}/${total})`;
+  wrap.style.display = 'flex';
+  const p = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  fill.style.width = p + '%';
+  if (pct) pct.textContent = p + '%';
+  if (title) title.textContent = phase === 'assemble' ? 'Assembling' : 'Evaluating';
+  if (label) {
+    const verb = phase === 'assemble' ? 'Assembling' : 'Tessellating';
+    label.textContent = total > 0
+      ? `${verb} ${current || ''} (${done}/${total})`.replace(/\s+/g, ' ').trim()
+      : `${verb} ${current || ''}`.trim();
+  }
 }
 
 async function hideEvalProgress() {
-  // Keep the bar visible long enough to be perceivable on fast evaluations.
+  // Keep the overlay visible long enough to be perceivable on fast evaluations.
   const elapsed = performance.now() - evalShownAt;
   const MIN_VISIBLE = 450;
   if (elapsed < MIN_VISIBLE) await new Promise(r => setTimeout(r, MIN_VISIBLE - elapsed));
   const wrap = document.getElementById('eval-progress');
   const fill = document.getElementById('ep-fill');
+  const pct = document.getElementById('ep-pct');
   if (wrap) {
     if (fill) fill.style.width = '100%'; // complete flash
+    if (pct) pct.textContent = '100%';
     setTimeout(() => { if (wrap) wrap.style.display = 'none'; }, 140);
   }
 }
@@ -1014,18 +1028,31 @@ async function evaluate() {
       // Runs AFTER evaluate returns, using the engine cache (no re-tessellation).
       if (isVehicle && (result.components || []).length > 1) {
         invoke('check_interferences', { vehicleRon: ron })
-          .then(interferences => {
-            if (interferences && interferences.length > 0) {
-              const extra = interferences.map(it => ({
-                severity: 'Warning',
-                message: `Interference: '${it.a}' overlaps '${it.b}' (~${it.volume.toFixed(1)} mm³). Move, shrink or remove one.`,
+          .then(report => {
+            const found = (report && report.found) || [];
+            const skipped = (report && report.skipped) || 0;
+            const extra = found.map(it => ({
+              severity: 'Warning',
+              message: `Interference: '${it.a}' overlaps '${it.b}' (~${it.volume.toFixed(1)} mm³). Move, shrink or remove one.`,
+              component: null,
+            }));
+            // The sweep is cost-bounded, so say when it did not cover everything
+            // rather than letting a partial result read as "all clear".
+            if (skipped > 0) {
+              extra.push({
+                severity: 'Info',
+                message: `Interference check skipped ${skipped} part pair${skipped > 1 ? 's' : ''} (too heavy to test) — overlaps involving very detailed parts may be unreported.`,
                 component: null,
-              }));
+              });
+            }
+            if (extra.length > 0) {
               // Merge into the issues list for this evaluate_vehicle pass.
               showIssues([...(result.issues || []), ...extra]);
+            }
+            if (found.length > 0) {
               lastInterferenceBlock =
                 '\n\n## Interference warnings (parts physically overlap)\n' +
-                extra.map(e => '- ' + e.message).join('\n') +
+                extra.filter(e => e.severity === 'Warning').map(e => '- ' + e.message).join('\n') +
                 '\nResolve every interference (move, shrink, or remove a part) before the design is done.';
             }
           })
@@ -2220,10 +2247,6 @@ function libChips(entry) {
   return out;
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 function renderLibraryGrid() {
   const grid = document.getElementById('lib-grid');
   const countEl = document.getElementById('lib-count');
@@ -3138,12 +3161,11 @@ const sketcher = createSketcher({
   getControls: () => controls,
   scene,
   evaluate,
+  // Sketch notifications go through the shared ux.js stack so they look like
+  // every other notification; showToast is the fallback if ux.js is absent.
   notify: (m, k, ms) => {
-    if (typeof notify === 'function') { notify(m, k, ms); return; }
-    if (typeof showToast === 'function') { showToast(m); return; }
-    // Last resort: ux.js owns the notification stack, so go through it.
-    window.__ux?.notify?.(m, k, ms);
-    console.log('[sketch]', m);
+    if (window.__ux?.notify) { window.__ux.notify(m, k, ms); return; }
+    if (typeof showToast === 'function') showToast(m);
   },
 });
 window.__sketcher = sketcher;
@@ -3494,13 +3516,15 @@ document.getElementById('vp-pan').addEventListener('click', (e) => {
   document.getElementById('vp-rotate').classList.remove('active');
 });
 
+// Grid/axes route through the shared toggle helpers (the same ones the ribbon
+// uses via window.__apro) so `gridVisible`/`axesVisible` stay authoritative.
+// Toggling helper.visible directly here left those flags stale, and a later
+// ribbon click would then flip the stale value back over the top.
 document.getElementById('vp-grid-toggle').addEventListener('click', (e) => {
-  gridHelper.visible = !gridHelper.visible;
-  e.currentTarget.classList.toggle('active');
+  e.currentTarget.classList.toggle('active', toggleGrid());
 });
 document.getElementById('vp-axes-toggle').addEventListener('click', (e) => {
-  axesHelper.visible = !axesHelper.visible;
-  e.currentTarget.classList.toggle('active');
+  e.currentTarget.classList.toggle('active', toggleAxes());
 });
 document.getElementById('vp-wireframe-toggle').addEventListener('click', (e) => {
   showWireframe = !showWireframe;
@@ -3663,7 +3687,6 @@ editor.addEventListener('input', () => {
 });
 
 // ===== AI Assistant =====
-const AI_INSTRUCTIONS_PATH = 'AI_INSTRUCTIONS.md';
 let aiMode = 'plan'; // 'plan' or 'edit'
 
 // Settings
@@ -3930,7 +3953,14 @@ function renderChatMessages() {
   chatMessagesEl.innerHTML = '';
   chatMessages.forEach(msg => {
     const bubble = document.createElement('div');
-    bubble.className = 'chat-msg ' + (msg.role === 'user' ? 'user-msg' : 'assistant-msg');
+    // The thinking placeholder gets its own class: the animated dots in ui.css
+    // are scoped to `.chat-msg.thinking-msg`, so labelling it `assistant-msg`
+    // left them permanently invisible.
+    bubble.className = 'chat-msg ' + (
+      msg.role === 'user' ? 'user-msg'
+        : msg.role === 'thinking' ? 'thinking-msg'
+          : 'assistant-msg'
+    );
 
     // Header row: avatar, role label, mode, constraint, timestamp
     const head = document.createElement('div');

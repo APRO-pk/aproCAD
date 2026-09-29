@@ -302,19 +302,10 @@ pub fn evaluate_solid_ops(ops: &[SolidOp]) -> Result<MeshData, String> {
 }
 
 /// Like [`evaluate_solid_ops`], but evaluates profile expressions against the
-/// parameter environment and resolves `SolidRef::Component` targets through
+/// parameter environment, resolves `SolidRef::Component` targets through
 /// `resolve_component` (used when evaluating inside a vehicle where sibling
-/// components are available).
-pub fn evaluate_solid_ops_with(
-    ops: &[SolidOp],
-    params: &ParamEnv,
-    resolve_component: &mut dyn FnMut(&str) -> Result<MeshData, String>,
-) -> Result<MeshData, String> {
-    evaluate_solid_ops_full(ops, params, &mut no_sketches, resolve_component)
-}
-
-/// Full evaluator: parameter environment, a sketch registry for
-/// `Profile::Reference`, and sibling-component resolution for booleans.
+/// components are available), and resolves sketch references through
+/// `resolve_sketch`.
 pub fn evaluate_solid_ops_full(
     ops: &[SolidOp],
     params: &ParamEnv,

@@ -1,7 +1,7 @@
 use apro_geometry::nozzle::{nozzle_contour, NozzleKind as GeomKind};
 use apro_document::vehicle::{NozzleParams, NozzleKind as DocKind};
 use truck_modeling::Solid;
-use apro_kernel::{revolve, solid_to_meshdata, MeshData};
+use apro_kernel::revolve;
 use crate::BuildSolid;
 
 fn convert_kind(doc: &DocKind) -> GeomKind {
@@ -23,11 +23,6 @@ pub fn build_nozzle(params: &NozzleParams) -> Solid {
         48,
     );
     revolve(&pts, 360.0).expect("nozzle revolve failed")
-}
-
-pub fn mesh_nozzle(params: &NozzleParams) -> MeshData {
-    let solid = build_nozzle(params);
-    solid_to_meshdata(&solid, 0.1)
 }
 
 impl BuildSolid for NozzleParams {

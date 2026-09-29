@@ -379,24 +379,6 @@ mod tests {
         assert_eq!(misses, 2);
     }
 
-    fn make_block(name: &str) -> Component {
-        Component {
-            name: name.into(),
-            material: "Al-6061-T6".into(),
-            visible: true,
-            transform: Transform::default(),
-            color: None,
-            kind: ComponentKind::Solid(vec![
-                SolidOp::Extrude {
-                    profile: Profile::Rectangle { width: 60.0, height: 60.0, corner_radius: None },
-                    height: 20.0,
-                    direction: None,
-                    taper: None,
-                },
-            ]),
-        }
-    }
-
     /// A cylindrical bore, used as the Difference target for a block so the
     /// result is a block with an open hole (non-empty geometry).
     fn make_bore(name: &str, height: f64) -> Component {

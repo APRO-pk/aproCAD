@@ -137,20 +137,6 @@ fn type_of(v: &Value) -> Option<String> {
     }
 }
 
-fn is_nullable(v: &Value) -> bool {
-    if let Some(t) = v.get("type") {
-        if t.is_array() && t.as_array().unwrap().iter().any(|x| x.as_str() == Some("null")) {
-            return true;
-        }
-    }
-    if let Some(any) = v.get("anyOf").and_then(|a| a.as_array()) {
-        if any.iter().any(|s| type_of(s).as_deref() == Some("null")) {
-            return true;
-        }
-    }
-    false
-}
-
 impl GrammarBuilder {
     fn new(schema: Value) -> Self {
         GrammarBuilder {

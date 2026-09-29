@@ -37,8 +37,8 @@
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --shadow-1: 0 2px 8px rgba(0,0,0,0.4);
   --shadow-2: 0 8px 24px rgba(0,0,0,0.5);
+  --teal-glow: rgba(0,229,176,0.35);
   --shadow-glow-teal: 0 0 12px var(--teal-glow);
-  --shadow-glow-violet: 0 0 12px var(--violet-glow);
 }
 
 html, body { height: 100%; overflow: hidden; }
@@ -91,10 +91,6 @@ body {
   0% { transform: scale(1); }
   50% { transform: scale(1.06); }
   100% { transform: scale(1); }
-}
-@keyframes scanline {
-  0% { transform: translateY(-100%); }
-  100% { transform: translateY(100%); }
 }
 @keyframes toastIn {
   0% { opacity: 0; transform: translate(-50%, 16px) scale(0.96); }
@@ -502,7 +498,6 @@ body {
   background: linear-gradient(135deg, var(--violet), var(--teal));
   box-shadow: var(--shadow-glow-teal); animation: breathe 5s ease-in-out infinite;
 }
-.chat-head-title { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; color: var(--ink); }
 .chat-session-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--ink-faint);
   box-shadow: 0 0 0 0 rgba(0,229,176,0.5); transition: all 200ms ease;
@@ -947,7 +942,6 @@ body {
 #ux-hud .hud-row { display: flex; justify-content: space-between; gap: 14px; }
 #ux-hud .hud-row .hk { color: var(--ink-faint); }
 #ux-hud .hud-row .hv { color: var(--teal); transition: all 200ms ease; }
-#ux-hud .hud-row .hv.bump { animation: tickPulse 300ms ease; }
 #ux-hud .hud-title {
   font-size: 8px; text-transform: uppercase; letter-spacing: 1px;
   color: var(--ink-faint); border-bottom: 1px solid var(--edge);
@@ -995,6 +989,7 @@ body {
 }
 .issue-error { background: var(--rose-dim); color: var(--rose); border-left: 2px solid var(--rose); }
 .issue-warning { background: var(--amber-dim); color: var(--amber); border-left: 2px solid var(--amber); }
+.issue-info { background: var(--violet-dim); color: var(--violet); border-left: 2px solid var(--violet); }
 
 /* ============================================================
    Component properties popup (Feature Manager selection, 3D view)
@@ -1054,18 +1049,50 @@ body {
 #vp-leader-line line { stroke-width: 1.2; stroke-dasharray: none; opacity: 0.85; }
 #vp-leader-line circle { opacity: 0.9; }
 
-/* Evaluation progress strip */
+/* Evaluation progress overlay — centred over the viewport, blurring the 3D
+   scene behind it so the work clearly "owns" the view while it runs. */
 #eval-progress {
-  position: absolute; top: 0; left: 0; right: 0;
-  z-index: 22; pointer-events: none;
+  position: absolute; inset: 0;
+  z-index: 30;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(5, 5, 10, 0.42);
+  backdrop-filter: blur(6px) saturate(0.85);
+  -webkit-backdrop-filter: blur(6px) saturate(0.85);
+  animation: ep-fade 160ms var(--ease-out);
 }
+@keyframes ep-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.ep-card {
+  min-width: 264px; max-width: 70%;
+  padding: 18px 20px 15px;
+  background: var(--glass-strong);
+  border: 1px solid var(--edge);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  display: flex; flex-direction: column; gap: 11px;
+}
+.ep-head { display: flex; align-items: center; gap: 9px; }
+.ep-title {
+  font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.ep-spinner {
+  width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid rgba(0, 229, 176, 0.22);
+  border-top-color: var(--teal);
+  animation: ep-spin 700ms linear infinite;
+}
+@keyframes ep-spin { to { transform: rotate(360deg); } }
+
 .ep-track {
-  height: 3px; width: 100%;
-  background: rgba(255, 255, 255, 0.06);
+  height: 5px; width: 100%;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: var(--r-pill);
   overflow: hidden;
 }
 .ep-fill {
   height: 100%; width: 0%;
+  border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--teal), #00a884);
   box-shadow: 0 0 8px var(--teal-glow);
   transition: width 120ms linear;
@@ -1075,12 +1102,17 @@ body {
   animation: ep-slide 900ms ease-in-out infinite alternate;
 }
 @keyframes ep-slide { from { margin-left: 0; } to { margin-left: 70%; } }
+
+.ep-foot {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
 .ep-label {
-  position: absolute; top: 6px; right: 12px;
-  font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase;
-  font-family: var(--font-mono); color: var(--teal);
-  background: rgba(0, 0, 0, 0.45); padding: 2px 9px;
-  border-radius: var(--r-pill); border: 1px solid var(--teal-glow);
+  font-size: 10px; font-family: var(--font-mono); color: var(--ink-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ep-pct {
+  font-size: 11px; font-family: var(--font-mono); font-weight: 700;
+  color: var(--teal); flex: none;
 }
 
 /* ============================================================
@@ -1299,21 +1331,6 @@ body {
 .lib-badge.ai { color: var(--violet); border-color: var(--violet-glow); background: var(--violet-dim); }
 .lib-badge.user { color: #59a7ff; border-color: rgba(89,167,255,0.4); background: rgba(89,167,255,0.08); }
 
-/* Expandable details */
-.lib-details-toggle {
-  width: 100%; margin-top: 8px; padding: 4px 8px;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;
-  background: rgba(255,255,255,0.03); border: 1px solid var(--edge);
-  border-radius: var(--r-sm); color: var(--ink-faint); cursor: pointer;
-  transition: all 130ms ease;
-}
-.lib-details-toggle:hover { color: var(--teal); border-color: var(--teal-glow); }
-.lib-details-toggle .t-chev { font-size: 8px; transition: transform 180ms ease; }
-.lib-details-toggle.open .t-chev { transform: rotate(180deg); }
-.lib-details { display: none; flex-direction: column; gap: 7px; margin-top: 8px; }
-.lib-details.open { display: flex; animation: fadeIn 180ms ease; }
-
 /* ============================================================
    Library detail view (in-panel screen)
    ============================================================ */
@@ -1373,10 +1390,6 @@ body {
 }
 .ln-savebar input:focus { border-color: var(--violet); }
 #ln-save { padding: 6px 14px !important; }
-.ln-left {
-  flex: 1.2; display: flex; flex-direction: column; min-width: 0;
-  border-right: 1px solid var(--edge);
-}
 .ln-left {
   flex: 1.2; display: flex; flex-direction: column; min-width: 0;
   border-right: 1px solid var(--edge);
@@ -1512,12 +1525,6 @@ body {
   padding: 3px 5px; font-size: 10px; font-family: var(--font-mono);
   outline: none; resize: vertical;
 }
-.comp-header {
-  padding: 4px 12px; background: var(--bg-2); color: var(--teal);
-  font-size: 10px; font-weight: 600; border-bottom: 1px solid var(--edge);
-  display: flex; align-items: center; justify-content: space-between;
-}
-.comp-header .comp-kind { color: var(--ink-faint); font-weight: 400; font-size: 9px; }
 .op-toolbar {
   padding: 4px 12px; border-top: 1px solid var(--edge);
   display: flex; gap: 3px; flex-wrap: wrap; background: var(--bg-0);

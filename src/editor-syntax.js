@@ -122,7 +122,8 @@ export function createSyntaxEditor(ta) {
   let folds = new Set(); // folded source start lines
   let compBlocks = []; // [{name,start,end}]
   let selectedName = null;
-  const SYN_DEBUG = true;
+  // Opt-in only: this gates a console.debug on every keystroke.
+  const SYN_DEBUG = !!window.__debug;
 
   let hlLayer = null;
   let gutter = null;
@@ -159,12 +160,6 @@ export function createSyntaxEditor(ta) {
         i++;
       }
     }
-  }
-
-  function dispToSrcRange(i) {
-    const e = dispEntries[i];
-    if (!e) return { s: Math.max(0, fullLines.length - 1), e: fullLines.length - 1 };
-    return e.fold ? { s: e.start, e: e.end } : { s: e.src, e: e.src };
   }
 
   function lineDimFlags() {

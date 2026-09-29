@@ -1,17 +1,12 @@
 use apro_geometry::bodytube::BodyTube;
 use apro_document::vehicle::BodyTubeParams;
 use truck_modeling::Solid;
-use apro_kernel::{revolve, solid_to_meshdata, MeshData};
+use apro_kernel::revolve;
 use crate::BuildSolid;
 
 pub fn build_bodytube(params: &BodyTubeParams) -> Solid {
     let pts = BodyTube::sample(params.length, params.radius, 4);
     revolve(&pts, 360.0).expect("bodytube revolve failed")
-}
-
-pub fn mesh_bodytube(params: &BodyTubeParams) -> MeshData {
-    let solid = build_bodytube(params);
-    solid_to_meshdata(&solid, 0.1)
 }
 
 impl BuildSolid for BodyTubeParams {

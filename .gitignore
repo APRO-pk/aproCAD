@@ -16,13 +16,16 @@
 **/*.rs.bk
 *.pdb
 
+# ---------- Packaged Windows build ----------
+# ~17 MB of exe, not source. Rebuild with `cargo build --release`.
+/dist/
+
 # ---------- Cargo / Rust tooling ----------
 # Cargo.lock IS tracked on purpose: this repo ships binaries, so the lockfile
 # is what makes builds reproducible.
 
 # ---------- Node / frontend ----------
 node_modules/
-dist/
 .vite/
 *.tsbuildinfo
 

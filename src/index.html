@@ -84,10 +84,6 @@
       <div id="ribbon-tabs">
         <button class="ribbon-tab active" data-ribbon="home">Home</button>
         <button class="ribbon-tab" data-ribbon="sketch">Sketch</button>
-        <button class="ribbon-tab" data-ribbon="features">Features</button>
-        <button class="ribbon-tab" data-ribbon="surfaces">Surfaces</button>
-        <button class="ribbon-tab" data-ribbon="evaluate">Evaluate</button>
-        <button class="ribbon-tab" data-ribbon="ai">AI Studio</button>
         <button class="ribbon-tab" data-ribbon="view">View</button>
       </div>
       <div id="ribbon-panels">
@@ -118,6 +114,12 @@
               <button class="ribbon-btn" data-tool="format" data-kbd="Ctrl+Shift+F" title="Format document"><span class="r-icon">{}</span>Format</button>
             </div>
           </div>
+          <div class="ribbon-group">
+            <span class="group-label">AI</span>
+            <div class="group-btns">
+              <button class="ribbon-btn primary-glow" data-tool="ai-chat" title="Open the AI assistant"><span class="r-icon">✦</span>AI Chat</button>
+            </div>
+          </div>
         </div>
         <!-- Sketch -->
         <div class="ribbon-panel" data-ribbon-panel="sketch">
@@ -129,109 +131,6 @@
               <button class="ribbon-btn" data-tool="sketch-circle" title="Sketch a circle"><span class="r-icon">◯</span>Circle</button>
               <button class="ribbon-btn" data-tool="sketch-arc" title="Sketch an arc"><span class="r-icon">◠</span>Arc</button>
               <button class="ribbon-btn" data-tool="sketch-spline" title="Sketch a spline"><span class="r-icon">∿</span>Spline</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Constraints</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="constraint-dim" title="Smart dimension"><span class="r-icon">↔</span>Dimension</button>
-              <button class="ribbon-btn" data-tool="constraint-horiz" title="Horizontal constraint"><span class="r-icon">―</span>Horizontal</button>
-              <button class="ribbon-btn" data-tool="constraint-vert" title="Vertical constraint"><span class="r-icon">│</span>Vertical</button>
-              <button class="ribbon-btn" data-tool="constraint-tangent" title="Tangent constraint"><span class="r-icon">◯</span>Tangent</button>
-              <button class="ribbon-btn" data-tool="constraint-coincident" title="Coincident constraint"><span class="r-icon">⊕</span>Coincident</button>
-            </div>
-          </div>
-        </div>
-        <!-- Features -->
-        <div class="ribbon-panel" data-ribbon-panel="features">
-          <div class="ribbon-group">
-            <span class="group-label">Create</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="feat-extrude" title="Extrude a profile"><span class="r-icon">▧</span>Extrude</button>
-              <button class="ribbon-btn" data-tool="feat-revolve" title="Revolve a profile"><span class="r-icon">◍</span>Revolve</button>
-              <button class="ribbon-btn" data-tool="feat-sweep" title="Sweep along a path"><span class="r-icon">➤</span>Sweep</button>
-              <button class="ribbon-btn" data-tool="feat-loft" title="Loft between profiles"><span class="r-icon">≋</span>Loft</button>
-              <button class="ribbon-btn" data-tool="feat-shell" title="Shell a solid"><span class="r-icon">◫</span>Shell</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Modify</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="feat-fillet" title="Fillet edges"><span class="r-icon">◠</span>Fillet</button>
-              <button class="ribbon-btn" data-tool="feat-chamfer" title="Chamfer edges"><span class="r-icon">◥</span>Chamfer</button>
-              <button class="ribbon-btn" data-tool="feat-cut" title="Cut a profile"><span class="r-icon">✂</span>Cut</button>
-              <button class="ribbon-btn" data-tool="feat-mirror" title="Mirror geometry"><span class="r-icon">⇋</span>Mirror</button>
-              <button class="ribbon-btn" data-tool="feat-pattern" title="Pattern geometry"><span class="r-icon">▦</span>Pattern</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Reference</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="ref-plane" title="Create reference plane"><span class="r-icon">▤</span>Plane</button>
-              <button class="ribbon-btn" data-tool="ref-axis" title="Create reference axis"><span class="r-icon">┄</span>Axis</button>
-              <button class="ribbon-btn" data-tool="ref-point" title="Create reference point"><span class="r-icon">•</span>Point</button>
-            </div>
-          </div>
-        </div>
-        <!-- Surfaces -->
-        <div class="ribbon-panel" data-ribbon-panel="surfaces">
-          <div class="ribbon-group">
-            <span class="group-label">Surface Tools</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="surf-extrude" title="Extrude surface"><span class="r-icon">▭</span>Extrude</button>
-              <button class="ribbon-btn" data-tool="surf-revolve" title="Revolve surface"><span class="r-icon">◍</span>Revolve</button>
-              <button class="ribbon-btn" data-tool="surf-loft" title="Loft surface"><span class="r-icon">≋</span>Loft</button>
-              <button class="ribbon-btn" data-tool="surf-offset" title="Offset surface"><span class="r-icon">◨</span>Offset</button>
-              <button class="ribbon-btn" data-tool="surf-fill" title="Fill a boundary"><span class="r-icon">◧</span>Fill</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Surface Ops</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="surf-trim" title="Trim surface"><span class="r-icon">✂</span>Trim</button>
-              <button class="ribbon-btn" data-tool="surf-extend" title="Extend surface"><span class="r-icon">⇄</span>Extend</button>
-              <button class="ribbon-btn" data-tool="surf-thicken" title="Thicken surface"><span class="r-icon">▮</span>Thicken</button>
-            </div>
-          </div>
-        </div>
-        <!-- Evaluate -->
-        <div class="ribbon-panel" data-ribbon-panel="evaluate">
-          <div class="ribbon-group">
-            <span class="group-label">Analysis</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="eval-measure" title="Measure geometry"><span class="r-icon">📏</span>Measure</button>
-              <button class="ribbon-btn" data-tool="eval-mass" title="Mass properties"><span class="r-icon">⚖</span>Mass Props</button>
-              <button class="ribbon-btn" data-tool="eval-check" title="Check geometry"><span class="r-icon">✓</span>Check</button>
-              <button class="ribbon-btn" data-tool="eval-section" title="Section view"><span class="r-icon">▭</span>Section</button>
-              <button class="ribbon-btn" data-tool="eval-clearance" title="Clearance analysis"><span class="r-icon">◌</span>Clearance</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Simulation</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="sim-fea" title="Stress analysis"><span class="r-icon">𝍢</span>FEA</button>
-              <button class="ribbon-btn" data-tool="sim-flow" title="Flow simulation"><span class="r-icon">≈</span>Flow</button>
-              <button class="ribbon-btn" data-tool="sim-flight" title="Flight performance"><span class="r-icon">✈</span>Flight</button>
-            </div>
-          </div>
-        </div>
-        <!-- AI Studio -->
-        <div class="ribbon-panel" data-ribbon-panel="ai">
-          <div class="ribbon-group">
-            <span class="group-label">AI Design</span>
-            <div class="group-btns">
-              <button class="ribbon-btn primary-glow" data-tool="ai-chat" data-kbd="Ctrl+Enter" title="Open AI chat"><span class="r-icon">✦</span>AI Chat</button>
-              <button class="ribbon-btn" data-tool="ai-enhance" title="Enhance current design"><span class="r-icon">✧</span>Enhance</button>
-              <button class="ribbon-btn" data-tool="ai-optimize" title="Optimize dimensions"><span class="r-icon">◎</span>Optimize</button>
-              <button class="ribbon-btn" data-tool="ai-review" title="Review design"><span class="r-icon">🔍</span>Review</button>
-            </div>
-          </div>
-          <div class="ribbon-group">
-            <span class="group-label">Rocket AI</span>
-            <div class="group-btns">
-              <button class="ribbon-btn" data-tool="ai-engine" title="Design a liquid engine"><span class="r-icon">🔥</span>Engine</button>
-              <button class="ribbon-btn" data-tool="ai-stage" title="Design a rocket stage"><span class="r-icon">🚀</span>Stage</button>
-              <button class="ribbon-btn" data-tool="ai-optimize-flight" title="Optimize for flight"><span class="r-icon">🛸</span>Flight Opt</button>
             </div>
           </div>
         </div>
@@ -427,11 +326,6 @@
             <button class="vp-side-btn" data-tool="tool-scale" title="Scale selected object (gizmo)"><span class="tip">Scale</span>⤢</button>
             <button class="vp-side-btn" data-tool="tool-rotate" title="Rotate selected object (gizmo)"><span class="tip">Rotate</span>⟳</button>
             <div class="vp-side-sep"></div>
-            <button class="vp-side-btn" data-tool="measure" title="Measure"><span class="tip">Measure</span>📏</button>
-            <button class="vp-side-btn" data-tool="section" title="Section view"><span class="tip">Section</span>▭</button>
-            <button class="vp-side-btn" data-tool="explode" title="Explode view"><span class="tip">Explode</span>⇶</button>
-            <button class="vp-side-btn" data-tool="annotate" title="Annotate"><span class="tip">Annotate</span>✎</button>
-            <button class="vp-side-btn" data-tool="coords" title="Coordinate readout"><span class="tip">Coords</span>⌖</button>
             <button class="vp-side-btn" data-tool="fullscreen" title="Fullscreen"><span class="tip">Fullscreen</span>⛶</button>
           </div>
 
@@ -453,10 +347,19 @@
           <!-- Issues overlay -->
           <div id="issues"></div>
 
-          <!-- Evaluation progress strip -->
-          <div id="eval-progress" style="display:none">
-            <div class="ep-track"><div class="ep-fill" id="ep-fill"></div></div>
-            <div class="ep-label" id="ep-label">Evaluating…</div>
+          <!-- Evaluation progress overlay (centred over the viewport) -->
+          <div id="eval-progress" style="display:none" role="status" aria-live="polite">
+            <div class="ep-card">
+              <div class="ep-head">
+                <span class="ep-spinner"></span>
+                <span class="ep-title" id="ep-title">Working</span>
+              </div>
+              <div class="ep-track"><div class="ep-fill" id="ep-fill"></div></div>
+              <div class="ep-foot">
+                <span class="ep-label" id="ep-label">Evaluating…</span>
+                <span class="ep-pct" id="ep-pct">0%</span>
+              </div>
+            </div>
           </div>
 
           <!-- Component properties popup (Feature Manager selection) -->
@@ -689,6 +592,16 @@
       }
       window.__boot = []; // breadcrumb array
       window.__bootT0 = Date.now();
+      // Verbose diagnostics are opt-in: add `?debug` to the URL or run
+      // `localStorage.aproDebug = '1'` in the console. Both start off because
+      // the instrumented paths run per-frame (scene state) and per-keystroke
+      // (editor sync), so leaving them on costs real time and floods the log.
+      window.__debug = (function () {
+        try {
+          if (/[?&]debug\b/.test(window.location.search)) return true;
+          return window.localStorage.getItem('aproDebug') === '1';
+        } catch (e) { return false; }
+      })();
       window.addEventListener('error', function (e) {
         var loc = e.filename ? (' @ ' + e.filename.split(/[\\/]/).pop() + ':' + e.lineno) : '';
         bootFail('BOOT ERROR: ' + (e.message || e.type) + loc);

@@ -1,17 +1,12 @@
 use apro_geometry::transition::Transition;
 use apro_document::vehicle::TransitionParams;
 use truck_modeling::Solid;
-use apro_kernel::{revolve, solid_to_meshdata, MeshData};
+use apro_kernel::revolve;
 use crate::BuildSolid;
 
 pub fn build_transition(params: &TransitionParams) -> Solid {
     let pts = Transition::sample(params.length, params.start_radius, params.end_radius, 16);
     revolve(&pts, 360.0).expect("transition revolve failed")
-}
-
-pub fn mesh_transition(params: &TransitionParams) -> MeshData {
-    let solid = build_transition(params);
-    solid_to_meshdata(&solid, 0.1)
 }
 
 impl BuildSolid for TransitionParams {

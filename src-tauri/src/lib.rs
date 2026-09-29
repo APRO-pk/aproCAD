@@ -356,7 +356,7 @@ fn describe_kind(kind: &ComponentKind) -> Vec<PropertyRow> {
 }
 
 #[tauri::command]
-fn describe_vehicle(vehicle_ron: String) -> Result<Vec<ComponentTable>, String> {
+async fn describe_vehicle(vehicle_ron: String) -> Result<Vec<ComponentTable>, String> {
     let vehicle: Vehicle = ron::from_str(&vehicle_ron)
         .map_err(|e| format!("Failed to parse: {}", e))?;
     let tables = vehicle.components.iter().map(|c| {
@@ -384,7 +384,7 @@ pub struct ParameterRow {
 }
 
 #[tauri::command]
-fn describe_parameters(vehicle_ron: String) -> Result<Vec<ParameterRow>, String> {
+async fn describe_parameters(vehicle_ron: String) -> Result<Vec<ParameterRow>, String> {
     let vehicle: Vehicle = ron::from_str(&vehicle_ron)
         .map_err(|e| format!("Failed to parse: {}", e))?;
     let resolved = match &vehicle.parameters {
@@ -609,7 +609,7 @@ fn modify_property(vehicle_ron: String, component_name: String, key: String, val
 }
 
 #[tauri::command]
-fn evaluate(component_ron: String) -> Result<EvaluateResult, String> {
+async fn evaluate(component_ron: String) -> Result<EvaluateResult, String> {
     let component: Component = ron::from_str(&component_ron)
         .map_err(|e| format!("Failed to parse RON: {}", e))?;
 
@@ -634,8 +634,13 @@ fn evaluate(component_ron: String) -> Result<EvaluateResult, String> {
     })
 }
 
+/// NOTE: every heavy command here is `async` on purpose. Tauri runs a
+/// synchronous command on the main thread, which freezes the window AND blocks
+/// delivery of the `eval-progress` events this command emits — so the bar could
+/// never animate. An `async` command is dispatched onto the async runtime, so
+/// the UI stays responsive and progress arrives while the work is happening.
 #[tauri::command]
-fn evaluate_vehicle(
+async fn evaluate_vehicle(
     vehicle_ron: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -680,37 +685,68 @@ fn evaluate_vehicle(
 }
 
 /// Pairwise assembly-space overlap check over every component mesh.
-/// Budgeted so it never stalls: CSG cost scales with the PRODUCT of the two
-/// parts' triangle counts, so each pair is capped on that product; pairs are
-/// capped too. Returns only genuine overlaps (volume above epsilon).
-fn detect_interferences(comps: &[ComponentMesh]) -> Vec<Interference> {
+///
+/// The CSG cost grows with the PRODUCT of the two parts' triangle counts, and
+/// measured on the bundled presets it is far worse than it looks: the
+/// full-rocket preset spends ~27 s in five pairs alone (NoseCone × Fins, product
+/// ~5M, is ~8.8 s), while a *small* pair can still be slow when the two shapes
+/// genuinely interpenetrate.
+///
+/// So this is bounded three ways — a per-pair triangle-product cap, a
+/// wall-clock budget, and a per-pair predicted-cost guard (the time check can
+/// only run *between* pairs, so one expensive pair must be refused up front).
+/// Skipping a pair can miss a real interference; that is the deliberate
+/// trade-off, because a check the user never sees finish is worse than no check.
+/// The number of skipped pairs is reported so the UI can say so.
+fn detect_interferences(comps: &[ComponentMesh]) -> (Vec<Interference>, usize) {
     const MAX_PAIRS: usize = 32;
-    const MAX_TRIS: usize = 200_000;      // whole assembly budget
-    const MAX_PAIR_PRODUCT: u64 = 8_000_000; // a.tris * b.tris cap (≈ a few seconds max)
+    const MAX_TRIS: usize = 200_000;       // whole-assembly budget
+    const MAX_PAIR_PRODUCT: u64 = 150_000; // ~15 ms .. ~1 s depending on shape
+    const TIME_BUDGET_MS: f64 = 1_200.0;   // hard wall-clock ceiling
 
+    let started = std::time::Instant::now();
+    let elapsed_ms = || started.elapsed().as_secs_f64() * 1000.0;
     let tot_tris: usize = comps.iter().map(|c| c.indices.len() / 3).sum();
     if comps.len() < 2 || tot_tris > MAX_TRIS {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
+    // Bounds only — no mesh clone, no CSG.
     let boxes: Vec<Option<[f32; 6]>> = comps.iter().map(|c| {
         if c.positions.len() < 9 { None } else { apro_kernel::aabb(&c.to_mesh()) }
     }).collect();
 
     let mut out = Vec::new();
     let mut pairs_tested = 0usize;
+    let mut skipped = 0usize;
     for i in 0..comps.len() {
         let Some(bi) = boxes[i] else { continue; };
         let ta = (comps[i].indices.len() / 3) as u64;
         for j in (i + 1)..comps.len() {
-            if pairs_tested >= MAX_PAIRS { return out; }
+            if pairs_tested >= MAX_PAIRS { return (out, skipped); }
+            let used = elapsed_ms();
+            if used > TIME_BUDGET_MS {
+                return (out, skipped + 1); // ran out of time: report as incomplete
+            }
             let Some(bj) = boxes[j] else { continue; };
             if bi[0] > bj[3] || bj[0] > bi[3] || bi[1] > bj[4] || bj[1] > bi[4] || bi[2] > bj[5] || bj[2] > bi[5] {
-                continue;
+                continue; // disjoint bounds: cannot intersect
             }
             let tb = (comps[j].indices.len() / 3) as u64;
-            if ta * tb > MAX_PAIR_PRODUCT {
-                continue; // this pair would take too long — skip, don't block the app
+            let prod = ta * tb;
+            if prod > MAX_PAIR_PRODUCT {
+                skipped += 1;
+                continue;
+            }
+            // The wall-clock check only runs BETWEEN pairs, so refuse a pair that
+            // would not finish inside what is left of the budget. Measured
+            // throughput is roughly 30k..100k triangle-pairs per ms depending on
+            // how much the shapes actually overlap, so this is a conservative
+            // estimate (it assumes the slow end).
+            let remaining = TIME_BUDGET_MS - used;
+            if (prod as f64) > remaining * 30_000.0 {
+                skipped += 1;
+                continue;
             }
             pairs_tested += 1;
             if let Some(vol) = apro_kernel::meshes_overlap_volume(&comps[i].to_mesh(), &comps[j].to_mesh()) {
@@ -718,25 +754,41 @@ fn detect_interferences(comps: &[ComponentMesh]) -> Vec<Interference> {
             }
         }
     }
-    out
+    (out, skipped)
 }
 
-/// Invoked by the frontend AFTER an evaluate returns, so a heavy assembly
-/// never blocks the viewport. Cheap enough to call as a fire-and-forget.
+/// Result of an interference sweep. Carries `skipped` so the UI can be honest:
+/// pairs skipped for cost reasons are *unchecked*, not "clear".
+#[derive(Debug, Serialize, Deserialize)]
+pub struct InterferenceReport {
+    pub found: Vec<Interference>,
+    /// Pairs that were not tested because they exceeded the cost budget.
+    pub skipped: usize,
+}
+
+/// Invoked by the frontend AFTER an evaluate returns. Async so the work runs off
+/// the main thread, and the engine lock is released before any CSG runs: the
+/// expensive part below used to hold it for tens of seconds, so the *next*
+/// evaluation blocked on the mutex and the UI sat at "Evaluating 0%".
 #[tauri::command]
-fn check_interferences(
+async fn check_interferences(
     vehicle_ron: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<Interference>, String> {
+) -> Result<InterferenceReport, String> {
     let vehicle: Vehicle = ron::from_str(&vehicle_ron)
         .map_err(|e| format!("Failed to parse vehicle RON: {}", e))?;
-    let mut engine = state.engine.lock().map_err(|e| format!("Lock error: {}", e))?;
-    // Reuse the engine cache (already evaluated) — no re-tessellation.
-    let comps: Vec<ComponentMesh> = engine.component_meshes(&vehicle).into_iter().map(|(name, material, color, m)| {
-        let visible = vehicle.components.iter().find(|c| c.name == name).map(|c| c.visible).unwrap_or(true);
-        ComponentMesh { name, material, color, visible, positions: m.positions, normals: m.normals, indices: m.indices }
-    }).collect();
-    Ok(detect_interferences(&comps))
+
+    // Take what we need from the cache, then drop the guard immediately: the
+    // CSG below must never run while the engine is locked.
+    let comps: Vec<ComponentMesh> = {
+        let engine = state.engine.lock().map_err(|e| format!("Lock error: {}", e))?;
+        engine.component_meshes(&vehicle).into_iter().map(|(name, material, color, m)| {
+            let visible = vehicle.components.iter().find(|c| c.name == name).map(|c| c.visible).unwrap_or(true);
+            ComponentMesh { name, material, color, visible, positions: m.positions, normals: m.normals, indices: m.indices }
+        }).collect()
+    };
+    let (found, skipped) = detect_interferences(&comps);
+    Ok(InterferenceReport { found, skipped })
 }
 
 /// Needle Mode (spike): run one `complete()` turn against the warm in-process
@@ -793,7 +845,7 @@ fn validate(component_ron: String) -> Result<Vec<Issue>, String> {
 }
 
 #[tauri::command]
-fn apply_patch_vehicle(vehicle_ron: String, patch: Patch) -> Result<PatchResult, String> {
+async fn apply_patch_vehicle(vehicle_ron: String, patch: Patch) -> Result<PatchResult, String> {
     let mut vehicle: Vehicle = from_str(&vehicle_ron)
         .map_err(|e| format!("Failed to parse: {}", e))?;
     Ok(apply_patch(&mut vehicle, &patch))
@@ -802,7 +854,7 @@ fn apply_patch_vehicle(vehicle_ron: String, patch: Patch) -> Result<PatchResult,
 /// Phase 3: apply a Patch emitted by the AI as RON (local GBNF path) or
 /// converted from JSON (cloud json_schema path).
 #[tauri::command]
-fn apply_patch_ron(vehicle_ron: String, patch_ron: String) -> Result<PatchResult, String> {
+async fn apply_patch_ron(vehicle_ron: String, patch_ron: String) -> Result<PatchResult, String> {
     let mut vehicle: Vehicle = from_str(&vehicle_ron)
         .map_err(|e| format!("Failed to parse vehicle: {}", e))?;
     let patch: Patch = from_str(&patch_ron)
@@ -825,7 +877,7 @@ fn parse_vehicle_or_component(ron_str: &str) -> Result<Vehicle, String> {
 }
 
 #[tauri::command]
-fn export_step(vehicle_ron: String, path: String) -> Result<String, String> {
+async fn export_step(vehicle_ron: String, path: String) -> Result<String, String> {
     let vehicle = parse_vehicle_or_component(&vehicle_ron)?;
     if vehicle.components.is_empty() {
         return Err("No components to export".into());
@@ -847,7 +899,7 @@ fn export_step(vehicle_ron: String, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn export_stl(vehicle_ron: String, path: String) -> Result<String, String> {
+async fn export_stl(vehicle_ron: String, path: String) -> Result<String, String> {
     let vehicle = parse_vehicle_or_component(&vehicle_ron)?;
     let file_path = PathBuf::from(&path);
     let mesh = if vehicle.components.len() == 1 {
@@ -1114,29 +1166,28 @@ fn json_to_ron(json_str: String) -> Result<String, String> {
     Err("JSON did not match Vehicle, Component, or Patch".into())
 }
 
+/// The AI rulebook, baked into the binary at compile time. A release build has
+/// no project tree next to it, so without this the assistant would silently
+/// lose its schema reference (or, worse, pick up an unrelated `AI_INSTRUCTIONS.md`
+/// found by walking up from the exe).
+const AI_INSTRUCTIONS_EMBEDDED: &str = include_str!("../../AI_INSTRUCTIONS.md");
+
+/// Read the AI rulebook. Prefers a file next to the executable (so a user can
+/// edit it without a rebuild) and otherwise falls back to the embedded copy,
+/// which is what makes the packaged .exe self-contained.
 #[tauri::command]
-fn read_ai_instructions(app_handle: tauri::AppHandle) -> Result<String, String> {    // Walk up from resource dir to find project root (where AI_INSTRUCTIONS.md lives)
-    let mut path = app_handle.path().resource_dir()
-        .map_err(|e| format!("cannot get resource dir: {e}"))?;
-    for _ in 0..5 {
-        let candidate = path.join("AI_INSTRUCTIONS.md");
+fn read_ai_instructions(app_handle: tauri::AppHandle) -> Result<String, String> {
+    if let Ok(dir) = app_handle.path().resource_dir() {
+        // Only the executable's own directory is consulted. Walking up would
+        // let a stray file in a parent folder silently replace the rulebook.
+        let candidate = dir.join("AI_INSTRUCTIONS.md");
         if candidate.exists() {
-            return std::fs::read_to_string(&candidate)
-                .map_err(|e| format!("cannot read AI_INSTRUCTIONS.md: {e}"));
-        }
-        if !path.pop() {
-            break;
+            if let Ok(text) = std::fs::read_to_string(&candidate) {
+                return Ok(text);
+            }
         }
     }
-    // Fallback: look relative to CWD
-    if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("AI_INSTRUCTIONS.md");
-        if candidate.exists() {
-            return std::fs::read_to_string(&candidate)
-                .map_err(|e| format!("cannot read AI_INSTRUCTIONS.md: {e}"));
-        }
-    }
-    Err("AI_INSTRUCTIONS.md not found — place it at the project root".into())
+    Ok(AI_INSTRUCTIONS_EMBEDDED.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -9,7 +9,6 @@
   // ---------- utils ----------
   const $ = (id) => document.getElementById(id);
   const on = (el, ev, fn) => { if (el) el.addEventListener(ev, fn); };
-  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function notify(msg, kind = 'info', ms = 3500) {
     const stack = $('ux-notify-stack');
@@ -51,10 +50,7 @@
     'tool-scale': () => { window.__apro?.setGizmoMode?.('scale'); },
     'tool-rotate': () => { window.__apro?.setGizmoMode?.('rotate'); },
     'view-front': () => snapCamDir('front'),
-    'view-back': () => snapCamDir('back'),
     'view-top': () => snapCamDir('top'),
-    'view-bottom': () => snapCamDir('bottom'),
-    'view-left': () => snapCamDir('left'),
     'view-right': () => snapCamDir('right'),
     'view-iso': () => {
       // Cycles: perspective ⇄ true isometric (orthographic) with a smooth
@@ -142,18 +138,13 @@
       });
     });
 
-    // Ribbon tool buttons → real actions where available, else toast placeholder
+    // Ribbon tool buttons all map to real actions — the ribbon only ships
+    // implemented tools, so there is no placeholder branch.
     document.querySelectorAll('.ribbon-btn[data-tool]').forEach((btn) => {
       on(btn, 'click', () => {
-        const tool = btn.dataset.tool;
         btn.classList.add('primary-glow');
         setTimeout(() => btn.classList.remove('primary-glow'), 900);
-        const action = TOOL_ACTIONS[tool];
-        if (action) {
-          action();
-        } else {
-          notify(`Tool <b>${tool}</b> — coming soon`, 'warn', 1800);
-        }
+        TOOL_ACTIONS[btn.dataset.tool]?.();
       });
 
       // Kbd tooltips: custom styled tooltip with title + shortcut hint
@@ -412,8 +403,14 @@
           else document.exitFullscreen?.();
         } else if (a === 'new') {
           window.__apro?.newDocument?.();
+        } else if (a === 'open') {
+          window.__apro?.openDocument?.();
+        } else if (a === 'save' || a === 'save-as') {
+          // Both go through the native Save-As dialog; there is no silent
+          // overwrite path, so "Save" and "Save As…" behave the same.
+          window.__apro?.saveDocument?.();
         } else {
-          notify(`<b>${a}</b> — coming soon`, 'warn', 1800);
+          console.warn('[ux] unhandled menu action:', a);
         }
         toggle(false);
       });
@@ -493,16 +490,13 @@
           else document.exitFullscreen?.();
           return;
         }
-        // Known tools route through the shared action table (gizmos etc.);
-        // unknown ones keep the placeholder toast.
+        // Every sidebar button maps to a real action; the toolbar only ships
+        // implemented tools.
         const action = TOOL_ACTIONS[btn.dataset.tool];
         if (action) {
           btn.classList.add('active');
           action();
-          return;
         }
-        notify(`Tool <b>${btn.dataset.tool}</b> — coming soon`, 'warn', 1800);
-        flashMode(btn.dataset.tool);
       });
     });
   }

@@ -1,18 +1,13 @@
 use apro_geometry::tank::{Tank, DomeKind as GeomDome};
 use apro_document::vehicle::{TankParams, DomeKind as DocDome};
 use truck_modeling::Solid;
-use apro_kernel::{revolve, solid_to_meshdata, MeshData};
+use apro_kernel::revolve;
 use crate::BuildSolid;
 
 pub fn build_tank(params: &TankParams) -> Solid {
     let dome = convert_dome(&params.dome);
     let pts = Tank::sample(params.radius, params.cylindrical_length, &dome, 32);
     revolve(&pts, 360.0).expect("tank revolve failed")
-}
-
-pub fn mesh_tank(params: &TankParams) -> MeshData {
-    let solid = build_tank(params);
-    solid_to_meshdata(&solid, 0.1)
 }
 
 fn convert_dome(doc: &DocDome) -> GeomDome {

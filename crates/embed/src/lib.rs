@@ -1,13 +1,9 @@
 //! Text embedding layer for APRO CAD.
 //!
-//! Provides a pluggable [`Embedder`] trait with two implementations:
-//!
-//! - [`HashEmbedder`] — deterministic, dependency-free hashing embedder.
-//!   Always available; used as the default so the library works offline and
-//!   tests are deterministic. Not as semantically strong as a real model.
-//! - [`FastEmbedEmbedder`] (feature `fastembed`) — real transformer model
-//!   (BAAI/bge-small-en-v1.5, 384-dim) via `fastembed-rs`. Bundle the model
-//!   files; do not download at runtime.
+//! Provides a pluggable [`Embedder`] trait and the [`HashEmbedder`]
+//! implementation: a deterministic, dependency-free hashing embedder that is
+//! always available, so the component library works offline and tests are
+//! deterministic. It is not semantically as strong as a trained model.
 
 /// An embedder maps text to a fixed-dimension unit vector.
 pub trait Embedder: Send + Sync {
@@ -91,54 +87,6 @@ impl Embedder for HashEmbedder {
     }
     fn embed(&self, text: &str) -> Vec<f32> {
         self.vectorize(text)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FastEmbedEmbedder — real transformer model (feature "fastembed")
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "fastembed")]
-pub struct FastEmbedEmbedder {
-    model: std::sync::Mutex<fastembed::TextEmbedding>,
-}
-
-#[cfg(feature = "fastembed")]
-impl FastEmbedEmbedder {
-    /// Create from bundled model files. `cache_dir` is where the ONNX
-    /// model + tokenizer live (bundle them; do not download at runtime).
-    pub fn new(cache_dir: &std::path::Path) -> Result<Self, String> {
-        use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
-        let model = TextEmbedding::try_new(
-            TextInitOptions::new(EmbeddingModel::BGESmallENv15)
-                .with_cache_dir(cache_dir.to_path_buf()),
-        )
-        .map_err(|e| format!("failed to init embedding model: {e}"))?;
-        Ok(FastEmbedEmbedder { model: std::sync::Mutex::new(model) })
-    }
-}
-
-#[cfg(feature = "fastembed")]
-impl Embedder for FastEmbedEmbedder {
-    fn dim(&self) -> usize {
-        // bge-small-en-v1.5 -> 384
-        384
-    }
-    fn embed(&self, text: &str) -> Vec<f32> {
-        let mut model = self.model.lock().unwrap();
-        let prefix = format!("query: {text}");
-        match model.embed(vec![prefix], None) {
-            Ok(mut v) => v.pop().unwrap_or_default(),
-            Err(_) => vec![],
-        }
-    }
-    fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
-        let mut model = self.model.lock().unwrap();
-        let prefixed: Vec<String> = texts.iter().map(|t| format!("passage: {t}")).collect();
-        match model.embed(prefixed, None) {
-            Ok(v) => v,
-            Err(_) => vec![],
-        }
     }
 }
 

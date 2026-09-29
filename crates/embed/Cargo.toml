@@ -3,5 +3,6 @@ name = "apro-embed"
 version = "0.1.0"
 edition = "2021"
 
+# No dependencies: the embedder is a deterministic hashing implementation, so
+# the component library works offline.
 [dependencies]
-serde = { version = "1", features = ["derive"] }

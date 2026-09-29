@@ -109,51 +109,6 @@ pub fn extrude(profile: &[[f64; 2]], height: f64) -> std::result::Result<Solid, 
 }
 
 // ---------------------------------------------------------------------------
-// Loft — ruled surface between profiles using homotopy shells
-// ---------------------------------------------------------------------------
-pub fn loft(profiles: &[Vec<[f64; 2]>]) -> std::result::Result<Solid, KernelError> {
-    if profiles.len() < 2 {
-        return Err(KernelError("loft requires at least 2 profiles".into()));
-    }
-    let n = dedup_profile(&profiles[0]).len();
-    for (i, p) in profiles.iter().enumerate() {
-        if dedup_profile(p).len() != n {
-            return Err(KernelError(format!(
-                "profile {} has {} unique points, expected {}", i, dedup_profile(p).len(), n
-            )));
-        }
-    }
-
-    // Build wires at increasing Z offsets
-    let wires: Vec<Wire> = profiles.iter().enumerate()
-        .map(|(idx, pts)| profile_to_wire(pts, idx as f64 * 1.0))
-        .collect();
-
-    // Collect all faces from homotopy shells + cap ends
-    let mut all_faces: Vec<Face> = Vec::new();
-
-    for i in 0..profiles.len() - 1 {
-        let shell = builder::try_wire_homotopy(&wires[i], &wires[i + 1])
-            .map_err(|_| KernelError(format!("homotopy failed between profiles {} and {}", i, i + 1)))?;
-        all_faces.extend(shell);
-    }
-
-    // Cap ends — note: Solid::try_new may fail if cap face edges don't match
-    // homotopy shell boundary edges exactly (topological stitching limitation).
-    // This is a known limitation in Truck 0.6.
-    let cap_bottom = builder::try_attach_plane(&[wires[0].clone()])
-        .map_err(|_| KernelError("failed to cap bottom".into()))?;
-    let cap_top = builder::try_attach_plane(&[wires.last().unwrap().clone()])
-        .map_err(|_| KernelError("failed to cap top".into()))?;
-    all_faces.push(cap_bottom);
-    all_faces.push(cap_top);
-
-    let shell: Shell = all_faces.into_iter().collect();
-    Solid::try_new(vec![shell])
-        .map_err(|_| KernelError("failed to stitch loft into closed solid — cap edges may not match shell boundaries".into()))
-}
-
-// ---------------------------------------------------------------------------
 // Sweep — tsweep along each path segment (single segment for now)
 // ---------------------------------------------------------------------------
 pub fn sweep(profile: &[[f64; 2]], path_points: &[[f64; 3]]) -> std::result::Result<Solid, KernelError> {
@@ -178,39 +133,6 @@ pub fn sweep(profile: &[[f64; 2]], path_points: &[[f64; 3]]) -> std::result::Res
 // ---------------------------------------------------------------------------
 pub fn shell(_solid: &Solid, _thickness: f64) -> std::result::Result<Solid, KernelError> {
     Err(KernelError("shell not yet implemented (Truck 0.6 limitation)".into()))
-}
-
-// ---------------------------------------------------------------------------
-// Boolean — Union / Difference / Intersection via truck-shapeops
-// ---------------------------------------------------------------------------
-pub fn boolean(base: &Solid, cutter: &Solid, kind: &BooleanKind) -> std::result::Result<Solid, KernelError> {
-    const TOL: f64 = 0.01;
-
-    let solid = match kind {
-        BooleanKind::Union => truck_shapeops::or(base, cutter, TOL),
-        BooleanKind::Intersection => truck_shapeops::and(base, cutter, TOL),
-        BooleanKind::Difference => {
-            // difference = base AND (complement of cutter)
-            let mut complement = cutter.clone();
-            complement.not();
-            truck_shapeops::and(base, &complement, TOL)
-        }
-    }
-    .ok_or_else(|| {
-        KernelError("boolean operation failed: the solids could not be combined (check that the cutter overlaps the base)".into())
-    })?;
-
-    // Convert intersection-curve leaders to B-spline curves so the result
-    // tessellates cleanly (mirrors the truck-shapeops punched-cube example).
-    for edge in solid.edge_iter() {
-        let mut curve = edge.curve();
-        if let Curve::IntersectionCurve(_) = &curve {
-            curve.to_bspline_leader(0.01, 0.1, 20);
-            edge.set_curve(curve);
-        }
-    }
-
-    Ok(solid)
 }
 
 // ---------------------------------------------------------------------------
@@ -574,16 +496,6 @@ mod tests {
             [0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0], [0.0, 0.0],
         ];
         let solid = extrude(&profile, 50.0).expect("extrude failed");
-        let mesh = tessellate(&solid, 1.0);
-        assert!(mesh.positions.len() >= 9);
-    }
-
-    #[test]
-    #[ignore = "Truck 0.6 cannot stitch cap faces to homotopy shells; use loft_mesh() instead"]
-    fn test_loft_two_profiles() {
-        let p1 = vec![[0.0, 0.0], [50.0, 0.0], [25.0, 40.0]];
-        let p2 = vec![[0.0, 0.0], [80.0, 0.0], [40.0, 60.0]];
-        let solid = loft(&[p1, p2]).expect("loft failed");
         let mesh = tessellate(&solid, 1.0);
         assert!(mesh.positions.len() >= 9);
     }

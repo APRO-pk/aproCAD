@@ -8,4 +8,3 @@ apro-document = { path = "../document" }
 apro-features = { path = "../features" }
 apro-kernel = { path = "../kernel" }
 ron = "0.8"
-rayon = "1"

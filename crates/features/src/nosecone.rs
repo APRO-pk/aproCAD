@@ -1,18 +1,13 @@
 use apro_geometry::NoseProfile;
 use apro_document::vehicle::{NoseConeParams, NoseConeProfile as DocProfile};
 use truck_modeling::Solid;
-use apro_kernel::{revolve, solid_to_meshdata, MeshData};
+use apro_kernel::revolve;
 use crate::BuildSolid;
 
 pub fn build_nosecone(params: &NoseConeParams) -> Solid {
     let profile = convert_profile(&params.profile);
     let pts = profile.sample(params.length, params.base_radius, 64);
     revolve(&pts, 360.0).expect("nosecone revolve failed")
-}
-
-pub fn mesh_nosecone(params: &NoseConeParams) -> MeshData {
-    let solid = build_nosecone(params);
-    solid_to_meshdata(&solid, 0.1)
 }
 
 fn convert_profile(doc: &DocProfile) -> NoseProfile {

@@ -99,7 +99,7 @@ mod tests {
 
     fn test_library() -> Library {
         let dir = tempfile::tempdir().unwrap();
-        Library::open(Some(dir.into_path()), None).unwrap()
+        Library::open(Some(dir.keep()), None).unwrap()
     }
 
     fn sample_vehicle_ron() -> String {
