@@ -1,0 +1,84 @@
+name: Release
+
+# Publishing a tag builds the app and attaches it to a GitHub Release, which is what
+# APRO Works downloads from. The asset name is deliberately version-free:
+#
+#   https://github.com/APRO-pk/aproCAD/releases/latest/download/apro-cad-win64.zip
+#
+# `/releases/latest/download/<name>` requires a byte-identical filename on every
+# release, so putting the version in the filename would break the hub's update path.
+#
+# `workflow_dispatch` builds and uploads a run artifact instead of releasing, so the
+# pipeline can be proved without cutting a version.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Caches the cargo registry and target/ between runs. A cold Tauri release build
+      # is slow; this is what keeps repeat releases quick.
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          # A release build of this workspace is large. Windows runners start with
+          # limited free space on C:, and exhausting it fails the link step in ways
+          # that look like unrelated errors.
+          Remove-Item -Recurse -Force "$env:ProgramFiles\Android", "$env:ProgramFiles\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:ProgramFiles (x86)\Android" -ErrorAction SilentlyContinue
+          Get-PSDrive C | Select-Object @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Stage the product folder
+        shell: pwsh
+        run: |
+          # The hub's installer strips one common root folder, so this layout lands
+          # apro-cad.exe at the install root, and executablePath stays "apro-cad.exe".
+          $stage = "dist/APRO-CAD-Windows"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item target/release/apro-cad.exe $stage
+          if (Test-Path target/release/ron-check.exe) {
+            Copy-Item target/release/ron-check.exe $stage
+          }
+          Get-ChildItem $stage | Select-Object Name, Length
+
+      - name: Package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/APRO-CAD-Windows" -DestinationPath "apro-cad-win64.zip" -Force
+          Get-Item "apro-cad-win64.zip" | Select-Object Name, Length
+
+      # Manual runs stop here: they produce a downloadable artifact, not a release.
+      - name: Upload build artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apro-cad-win64
+          path: apro-cad-win64.zip
+          if-no-files-found: error
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apro-cad-win64.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
