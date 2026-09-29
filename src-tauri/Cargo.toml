@@ -25,3 +25,12 @@ apro-recompute = { path = "../crates/recompute" }
 apro-massprops = { path = "../crates/massprops" }
 apro-library = { path = "../crates/library" }
 apro-grammar = { path = "../crates/grammar" }
+
+[features]
+# Production builds.
+#
+# The `tauri` crate's build script computes `dev = !custom_protocol`. This app has no
+# `devUrl`, so a development build still happens to show the bundled frontend — but it
+# also compiles in dev-only behaviour (devtools among it) that has no business in a
+# release. Declaring the feature makes production mode explicit instead of incidental.
+custom-protocol = ["tauri/custom-protocol"]

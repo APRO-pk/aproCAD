@@ -45,7 +45,10 @@ jobs:
           Get-PSDrive C | Select-Object @{n='FreeGB';e={[math]::Round($_.Free/1GB,1)}}
 
       - name: Build
-        run: cargo build --release --locked
+        # `--features apro-cad/custom-protocol` is required. A bare `cargo build
+        # --release` leaves the tauri build script with `dev = true`, which compiles in
+        # dev-only behaviour. See the comment in src-tauri/Cargo.toml.
+        run: cargo build --release --locked --features apro-cad/custom-protocol
 
       - name: Stage the product folder
         shell: pwsh
