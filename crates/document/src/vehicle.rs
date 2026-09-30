@@ -1,5 +1,5 @@
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub enum Units {
@@ -40,6 +40,22 @@ impl Default for Transform {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct Vehicle {
     pub name: String,
+    /// Stable identity for this design, assigned the first time it is published to
+    /// APRO Works.
+    ///
+    /// `name` is a label the author may edit at any time. `uid` is what the platform
+    /// tracks the published artifact under, so renaming a design does not orphan its
+    /// revision history or silently look like a different vehicle to every consumer.
+    ///
+    /// Absent on documents authored before this field existed, and on designs that have
+    /// never been published. The publish path refuses to guess rather than falling back
+    /// to `name`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_uid_opt"
+    )]
+    pub uid: Option<String>,
     #[serde(default)]
     pub units: Units,
     /// Named parameters and equations (`Parameters(...)` block).
@@ -65,6 +81,51 @@ pub struct Component {
 }
 
 fn default_visible() -> bool { true }
+
+/// Deserialize the `Vehicle.uid` field.
+///
+/// Accepts `uid: "veh-0001"` and `uid: None`.
+///
+/// RON only accepts the `Some(...)` wrapper around an `Option`, but that wrapper is noise
+/// in a document a human — or a language model — is writing, and JSON has no wrapper at
+/// all. Dispatching through `deserialize_any` instead of `deserialize_option` lets the
+/// bare string through, so one spelling works in both formats, which matters because
+/// `json_to_ron` converts between them. This mirrors `de_params_opt` in `params.rs`,
+/// which solved the same problem for `parameters`.
+pub fn de_uid_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    struct UidVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for UidVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a uid string or `None`")
+        }
+
+        fn visit_none<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_string<E: serde::de::Error>(self, value: String) -> Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+
+        fn visit_some<D2: Deserializer<'de>>(self, d: D2) -> Result<Self::Value, D2::Error> {
+            // Re-dispatch so a wrapped value lands on `visit_str`.
+            d.deserialize_any(UidVisitor)
+        }
+    }
+
+    d.deserialize_any(UidVisitor)
+}
 
 impl Component {
     pub fn material_name(&self) -> String {
@@ -449,4 +510,93 @@ pub enum IssueSeverity {
     Error,
     Warning,
     Info,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A document written before `uid` existed must still load. Adding a field to the
+    /// grammar would otherwise invalidate every saved file in the library.
+    #[test]
+    fn a_document_without_a_uid_still_parses() {
+        let ron = r#"Vehicle(
+            name: "Legacy",
+            units: Millimeters,
+            components: [],
+        )"#;
+        let vehicle: Vehicle = ron::from_str(ron).unwrap();
+        assert_eq!(vehicle.uid, None);
+        assert_eq!(vehicle.name, "Legacy");
+    }
+
+    /// RON matches named struct fields by name, not position, which is what let `uid` be
+    /// inserted into the middle of the struct without rewriting saved documents.
+    #[test]
+    fn uid_round_trips_through_ron() {
+        let ron = r#"Vehicle(
+            uid: "veh-0001",
+            name: "Rocket",
+            units: Millimeters,
+            components: [],
+        )"#;
+        let vehicle: Vehicle = ron::from_str(ron).unwrap();
+        assert_eq!(vehicle.uid.as_deref(), Some("veh-0001"));
+
+        let text = ron::to_string(&vehicle).unwrap();
+        let again: Vehicle = ron::from_str(&text).unwrap();
+        assert_eq!(vehicle, again);
+    }
+
+    /// An unpublished design must not accumulate a null field in every saved file.
+    #[test]
+    fn an_unpublished_design_omits_the_uid() {
+        let vehicle = Vehicle {
+            uid: None,
+            name: "Draft".into(),
+            units: Units::Millimeters,
+            parameters: None,
+            components: vec![],
+        };
+        let text = ron::to_string(&vehicle).unwrap();
+        assert!(!text.contains("uid"), "serialized as {text}");
+    }
+
+    /// The schema the AI grammar is generated from must expose `uid`, otherwise a model
+    /// can never produce a document the publish path will accept.
+    #[test]
+    fn the_json_schema_mentions_uid() {
+        let schema = schemars::schema_for!(Vehicle);
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(json.contains("uid"), "schema did not mention uid");
+    }
+
+    /// `json_to_ron` converts between the two formats, so a bare string has to mean the
+    /// same thing on both sides. JSON has no `Some(...)`, which is the whole reason the
+    /// RON side accepts a bare string too.
+    #[test]
+    fn uid_round_trips_through_json() {
+        let json = r#"{
+            "name": "Rocket",
+            "uid": "veh-0001",
+            "units": "Millimeters",
+            "components": []
+        }"#;
+        let vehicle: Vehicle = serde_json::from_str(json).unwrap();
+        assert_eq!(vehicle.uid.as_deref(), Some("veh-0001"));
+
+        let text = serde_json::to_string(&vehicle).unwrap();
+        let again: Vehicle = serde_json::from_str(&text).unwrap();
+        assert_eq!(vehicle, again);
+    }
+
+    /// A JSON null and an absent key must both mean "no uid", not a parse failure.
+    #[test]
+    fn json_null_and_absent_both_mean_no_uid() {
+        let with_null = r#"{"name":"A","uid":null,"units":"Millimeters","components":[]}"#;
+        assert_eq!(serde_json::from_str::<Vehicle>(with_null).unwrap().uid, None);
+
+        let without = r#"{"name":"A","units":"Millimeters","components":[]}"#;
+        assert_eq!(serde_json::from_str::<Vehicle>(without).unwrap().uid, None);
+    }
 }

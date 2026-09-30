@@ -25,7 +25,7 @@ pub fn component_ron(comp: &Component) -> Result<String, String> {
 
 /// Compute mass properties for a single component via a single-component vehicle.
 pub fn component_mass_props(comp: &Component) -> Result<apro_massprops::MassProperties, String> {
-    let vehicle = Vehicle { parameters: None,
+    let vehicle = Vehicle { uid: None, parameters: None,
         name: "library".into(),
         units: apro_document::vehicle::Units::Millimeters,
         components: vec![comp.clone()],

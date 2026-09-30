@@ -736,7 +736,7 @@ mod tests {
             ("body_od", Expr::Number(98.0)),
             ("body_id", Expr::Expression("body_od - 2 * wall".into())),
         ]);
-        let v = crate::vehicle::Vehicle {
+        let v = crate::vehicle::Vehicle { uid: None,
             name: "R".into(),
             units: crate::vehicle::Units::Millimeters,
             parameters: Some(ps),

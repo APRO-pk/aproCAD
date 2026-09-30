@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn vehicle_parameter_cycle_is_error() {
-        let v = crate::vehicle::Vehicle {
+        let v = crate::vehicle::Vehicle { uid: None,
             name: "Cyc".into(),
             units: crate::vehicle::Units::Millimeters,
             parameters: Some(vec![
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn vehicle_parameter_block_ok() {
-        let v = crate::vehicle::Vehicle {
+        let v = crate::vehicle::Vehicle { uid: None,
             name: "Ok".into(),
             units: crate::vehicle::Units::Millimeters,
             parameters: Some(vec![

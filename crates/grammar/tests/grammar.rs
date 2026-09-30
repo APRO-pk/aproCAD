@@ -348,7 +348,7 @@ fn test_every_solid_op_roundtrips_through_schema() {
 
     for op in ops {
         let ron_str = ron::to_string(&op).expect("op serializes");
-        let vehicle = Vehicle { parameters: None,
+        let vehicle = Vehicle { uid: None, parameters: None,
             name: "t".into(),
             units: Units::Millimeters,
             components: vec![Component {

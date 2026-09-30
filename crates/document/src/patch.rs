@@ -333,7 +333,7 @@ mod tests {
     use super::*;
 
     fn make_test_vehicle() -> Vehicle {
-        Vehicle { parameters: None,
+        Vehicle { uid: None, parameters: None,
             name: "Test".into(),
             units: Units::Millimeters,
             components: vec![

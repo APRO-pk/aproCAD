@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_single_component_vehicle() {
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Test".into(),
             units: Units::Millimeters,
             components: vec![Component {
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_multi_component_vehicle() {
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Full Rocket".into(),
             units: Units::Millimeters,
             components: vec![
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_transform_xyz_position_offset() {
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Offset".into(),
             units: Units::Millimeters,
             components: vec![Component {
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn test_transform_rotation_moves_points() {
         // Extrude a rectangle, rotate 90° around X so Y→Z, verify Z values change
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Rotated".into(),
             units: Units::Millimeters,
             components: vec![Component {
@@ -278,7 +278,7 @@ mod tests {
         // Base block (local box z 0..20) booleans out the Bore component's
         // LOCAL cylinder mesh (z 0..20). The Bore is rendered far away in the
         // assembly, so the hole at the base's top face must be open.
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Hole".into(),
             units: Units::Millimeters,
             components: vec![
@@ -335,7 +335,7 @@ mod tests {
     fn test_boolean_circular_reference_errors() {
         // A depends on B; B depends on A -> the circular reference must be
         // reported instead of recursing forever (would stack overflow).
-        let v = Vehicle { parameters: None,
+        let v = Vehicle { uid: None, parameters: None,
             name: "Circular".into(),
             units: Units::Millimeters,
             components: vec![
@@ -416,7 +416,7 @@ mod tests {
     }
 
     fn vehicle_of(comps: Vec<Component>) -> Vehicle {
-        Vehicle { parameters: None, name: "SketchDoc".into(), units: Units::Millimeters, components: comps }
+        Vehicle { uid: None, parameters: None, name: "SketchDoc".into(), units: Units::Millimeters, components: comps }
     }
 
     fn bbox(mesh: &MeshData) -> [f32; 6] {

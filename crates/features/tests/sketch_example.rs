@@ -21,7 +21,7 @@ fn load_example() -> Vehicle {
 }
 
 fn single(component: &Component) -> Vehicle {
-    Vehicle {
+    Vehicle { uid: None,
         parameters: None,
         name: "one".into(),
         units: Units::Millimeters,
@@ -40,7 +40,7 @@ fn component_with_sketches(vehicle: &Vehicle, component: &Component) -> Vehicle 
             .filter(|c| matches!(c.kind, ComponentKind::Sketch(_)))
             .cloned(),
     );
-    Vehicle {
+    Vehicle { uid: None,
         parameters: None,
         name: "one".into(),
         units: Units::Millimeters,

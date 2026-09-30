@@ -1,7 +1,7 @@
 use apro_document::vehicle::*;
 
 fn main() {
-    let v = Vehicle { parameters: None,
+    let v = Vehicle { uid: None, parameters: None,
         name: "patch".into(),
         units: Units::Millimeters,
         components: vec![Component {

@@ -131,6 +131,63 @@ pub fn compute_mass_properties(mesh: &apro_kernel::MeshData, density: f64) -> Ma
     }
 }
 
+/// Combine per-part mass properties into one rigid-body set.
+///
+/// Each part's inertia is about **its own** centre of gravity, so combining them is not a
+/// sum: the parallel axis theorem has to move each one onto the assembly's centre of
+/// gravity first.
+///
+/// ```text
+/// I_total = Σ ( I_i + m_i · (|d_i|²·E − d_i ⊗ d_i) ),  d_i = cg_i − cg_total
+/// ```
+///
+/// Overlapping parts are counted twice. That is a modelling error rather than an
+/// arithmetic one, and it is what the interference check exists to report.
+pub fn combine(parts: &[MassProperties]) -> MassProperties {
+    let total_mass: f64 = parts.iter().map(|p| p.mass).sum();
+    if total_mass <= 1e-15 {
+        return MassProperties::zero();
+    }
+
+    let mut com = [0.0_f64; 3];
+    for part in parts {
+        for axis in 0..3 {
+            com[axis] += part.mass * part.center_of_mass[axis];
+        }
+    }
+    for axis in 0..3 {
+        com[axis] /= total_mass;
+    }
+
+    let mut inertia = [[0.0_f64; 3]; 3];
+    for part in parts {
+        let d = [
+            part.center_of_mass[0] - com[0],
+            part.center_of_mass[1] - com[1],
+            part.center_of_mass[2] - com[2],
+        ];
+        let d_squared = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+
+        for row in 0..3 {
+            for col in 0..3 {
+                let shift = if row == col {
+                    part.mass * (d_squared - d[row] * d[col])
+                } else {
+                    -part.mass * d[row] * d[col]
+                };
+                inertia[row][col] += part.inertia_tensor[row][col] + shift;
+            }
+        }
+    }
+
+    MassProperties {
+        volume: parts.iter().map(|p| p.volume).sum(),
+        center_of_mass: com,
+        mass: total_mass,
+        inertia_tensor: inertia,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +240,116 @@ mod tests {
         let mp = compute_mass_properties(&mesh, 1.0);
         assert!((mp.volume).abs() < 1e-10);
         assert!((mp.mass).abs() < 1e-10);
+    }
+
+    /// A unit cube occupying `[x, x+1] x [0, 1] x [0, 1]`.
+    fn cube_mesh(x: f32) -> MeshData {
+        let positions = vec![
+            x, 0.0, 0.0,  x + 1.0, 0.0, 0.0,  x + 1.0, 1.0, 0.0,  x, 1.0, 0.0,
+            x, 0.0, 1.0,  x + 1.0, 0.0, 1.0,  x + 1.0, 1.0, 1.0,  x, 1.0, 1.0,
+        ];
+        let indices = vec![
+            0, 2, 1, 0, 3, 2, // z = 0
+            4, 5, 6, 4, 6, 7, // z = 1
+            0, 5, 4, 0, 1, 5, // y = 0
+            3, 6, 2, 3, 7, 6, // y = 1
+            0, 7, 3, 0, 4, 7, // x = 0
+            1, 6, 5, 1, 2, 6, // x = 1
+        ];
+        MeshData { positions, normals: vec![0.0; 24], indices }
+    }
+
+    /// The same cube at density 1, so mass equals volume.
+    fn cube_at(x: f32) -> MassProperties {
+        compute_mass_properties(&cube_mesh(x), 1.0)
+    }
+
+    #[test]
+    fn combine_of_one_part_is_that_part() {
+        let part = cube_at(0.0);
+        let combined = combine(std::slice::from_ref(&part));
+        assert!((combined.mass - part.mass).abs() < 1e-12);
+        assert!((combined.center_of_mass[0] - part.center_of_mass[0]).abs() < 1e-12);
+        assert!(
+            (combined.inertia_tensor[1][1] - part.inertia_tensor[1][1]).abs() < 1e-12
+        );
+    }
+
+    #[test]
+    fn combine_of_nothing_is_zero() {
+        let combined = combine(&[]);
+        assert_eq!(combined.mass, 0.0);
+        assert_eq!(combined.inertia_tensor, [[0.0; 3]; 3]);
+    }
+
+    /// Two unit cubes side by side along X, density 1, each of mass 1.
+    ///
+    /// The combined centre of gravity sits midway between them, and the parallel axis
+    /// theorem has a clean answer: the offset is one cube-width from each centre, so
+    /// I_yy = I_zz = 2 · (1/6 + 1) = 7/3, while I_xx is unchanged by the shift along X.
+    #[test]
+    fn combine_applies_the_parallel_axis_theorem() {
+        let parts = [cube_at(0.0), cube_at(2.0)];
+        let combined = combine(&parts);
+
+        assert!((combined.mass - 2.0).abs() < 0.02, "mass={}", combined.mass);
+        assert!((combined.center_of_mass[0] - 1.5).abs() < 0.01);
+        assert!((combined.center_of_mass[1] - 0.5).abs() < 0.01);
+
+        // I_xx about the combined cg: the shift is along X, so it contributes nothing.
+        let ixx_expected = 2.0 * (1.0 / 6.0);
+        assert!(
+            (combined.inertia_tensor[0][0] - ixx_expected).abs() < 0.02,
+            "Ixx={} expected={}",
+            combined.inertia_tensor[0][0],
+            ixx_expected
+        );
+
+        // I_yy and I_zz pick up m·d² with d = 1.
+        let iyy_expected = 2.0 * (1.0 / 6.0 + 1.0);
+        assert!(
+            (combined.inertia_tensor[1][1] - iyy_expected).abs() < 0.05,
+            "Iyy={} expected={}",
+            combined.inertia_tensor[1][1],
+            iyy_expected
+        );
+        assert!(
+            (combined.inertia_tensor[2][2] - iyy_expected).abs() < 0.05,
+            "Izz={} expected={}",
+            combined.inertia_tensor[2][2],
+            iyy_expected
+        );
+    }
+
+    /// The bug this replaced: the assembly was measured with the FIRST component's
+    /// density applied to every part, so a carbon nose on an aluminium body weighed as
+    /// aluminium. Combining per-part results must use each part's own density.
+    #[test]
+    fn combine_respects_per_part_density() {
+        let aluminium = compute_mass_properties(&cube_mesh(0.0), 2700.0 / 1.0e9);
+        let carbon = compute_mass_properties(&cube_mesh(2.0), 1600.0 / 1.0e9);
+        let combined = combine(&[aluminium, carbon]);
+
+        let expected = (2700.0 + 1600.0) / 1.0e9;
+        assert!(
+            (combined.mass - expected).abs() < 1e-9,
+            "mass={} expected={}",
+            combined.mass,
+            expected
+        );
+        // Mass-weighted, so the denser aluminium cube pulls the centre of gravity.
+        assert!(
+            combined.center_of_mass[0] < 1.5,
+            "cg x={} should sit below the midpoint",
+            combined.center_of_mass[0]
+        );
+
+        // The old single-density path would have weighed the carbon cube as aluminium.
+        let naive = combine(&[
+            compute_mass_properties(&cube_mesh(0.0), 2700.0 / 1.0e9),
+            compute_mass_properties(&cube_mesh(2.0), 2700.0 / 1.0e9),
+        ]);
+        assert!(naive.mass > combined.mass);
+        assert!((naive.center_of_mass[0] - 1.5).abs() < 0.01);
     }
 }

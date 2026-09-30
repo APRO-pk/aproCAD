@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn test_vehicle_assembly() {
         let mut engine = RecomputeEngine::new();
-        let vehicle = Vehicle { parameters: None,
+        let vehicle = Vehicle { uid: None, parameters: None,
             name: "Test".into(),
             units: Units::Millimeters,
             components: vec![make_nosecone()],
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn test_vehicle_boolean_dependency_order() {
         // "Cut" must be built before "Base" because Base differences it out.
-        let vehicle = Vehicle { parameters: None,
+        let vehicle = Vehicle { uid: None, parameters: None,
             name: "Dep".into(),
             units: Units::Millimeters,
             components: vec![
@@ -453,7 +453,7 @@ mod tests {
     fn test_transitive_fingerprint_invalidates_dependent() {
         // Base differences out Cut. Changing Cut's bore height must invalidate
         // Base's cache entry even though Base's own RON is unchanged.
-        let vehicle = |cut_height: f64| Vehicle { parameters: None,
+        let vehicle = |cut_height: f64| Vehicle { uid: None, parameters: None,
             name: "Dep".into(),
             units: Units::Millimeters,
             components: vec![
@@ -477,7 +477,7 @@ mod tests {
 
     #[test]
     fn test_circular_boolean_dependency_returns_empty() {
-        let vehicle = Vehicle { parameters: None,
+        let vehicle = Vehicle { uid: None, parameters: None,
             name: "Circ".into(),
             units: Units::Millimeters,
             components: vec![

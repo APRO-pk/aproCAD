@@ -11,5 +11,6 @@ members = [
     "crates/embed",
     "crates/library",
     "crates/grammar",
+    "crates/bridge",
     "src-tauri",
 ]
