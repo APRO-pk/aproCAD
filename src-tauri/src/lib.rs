@@ -5,7 +5,7 @@ use apro_document::vehicle::{Component, ComponentKind, Issue, IssueSeverity, Veh
     NoseConeProfile, DomeKind, Transform, SolidOp, Profile, SketchPlane, SketchEntity};
 use apro_document::patch::{Patch, PatchResult, apply_patch};
 use apro_document::validation::{validate_component, validate_vehicle};
-use apro_massprops::{compute_mass_properties, MassProperties};
+use apro_massprops::{combine, compute_mass_properties, MassProperties};
 use apro_document::material::density_kg_per_mm3;
 use apro_features::eval::evaluate_solid_ops;
 use apro_features::shorthands::{nosecone_to_ops, bodytube_to_ops, transition_to_ops, tank_to_ops, nozzle_to_ops};
@@ -83,6 +83,62 @@ impl ComponentMesh {
             indices: self.indices.clone(),
         }
     }
+}
+
+/// Assemble the whole vehicle's mass properties from its parts.
+///
+/// Each part is measured at **its own** material density and then combined with the
+/// parallel axis theorem. Measuring the union mesh with one density would weigh a carbon
+/// nose cone as aluminium — a plausible-looking wrong number, which is the worst kind.
+///
+/// Returns `None` when no component produced a mesh, so the caller can fall back rather
+/// than reporting a confident zero.
+fn combine_component_mass_props(components: &[ComponentMesh]) -> Option<MassProperties> {
+    if components.is_empty() {
+        return None;
+    }
+    let per_part: Vec<MassProperties> = components
+        .iter()
+        .map(|c| compute_mass_properties(&c.to_mesh(), density_kg_per_mm3(&c.material)))
+        .collect();
+    Some(combine(&per_part))
+}
+
+/// The axis aproCAD bodies are modelled along.
+///
+/// The app's own presets build a rocket up +Z, so the longitudinal axis is Z. This is a
+/// stated convention, not something read out of the document — a vehicle modelled along
+/// another axis would need to say so.
+const LONGITUDINAL_AXIS: usize = 2;
+
+/// Axis-aligned bounding-box extent of the whole assembly, in document units.
+///
+/// Returns `None` for an assembly with no vertices, rather than a zero-sized box that
+/// would produce a zero reference area.
+fn assembly_extent(components: &[ComponentMesh]) -> Option<[f64; 3]> {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut seen = false;
+
+    for component in components {
+        for point in component.positions.chunks_exact(3) {
+            seen = true;
+            for (axis, value) in point.iter().enumerate() {
+                let value = *value as f64;
+                if value < min[axis] {
+                    min[axis] = value;
+                }
+                if value > max[axis] {
+                    max[axis] = value;
+                }
+            }
+        }
+    }
+
+    if !seen {
+        return None;
+    }
+    Some([max[0] - min[0], max[1] - min[1], max[2] - min[2]])
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -665,11 +721,17 @@ async fn evaluate_vehicle(
         ComponentMesh { name, material, color, visible, positions: m.positions, normals: m.normals, indices: m.indices }
     }).collect();
 
-    let density = vehicle.components.first()
-        .map(|c| density_kg_per_mm3(&c.material_name()))
-        .unwrap_or(2700.0);
-
-    let mass_props = Some(compute_mass_properties(&mesh, density));
+    // Measure each part at its OWN density, then combine.
+    //
+    // The union mesh has no material: it is one triangle soup drawn from every
+    // component. Measuring it with a single density silently weighs a carbon nose cone
+    // as aluminium, which is exactly the kind of error that survives a spot-check
+    // because the number it produces is still plausible.
+    let mass_props = Some(match combine_component_mass_props(&components) {
+        Some(combined) => combined,
+        // Nothing was cached, so fall back to the union mesh with the default density.
+        None => compute_mass_properties(&mesh, density_kg_per_mm3("")),
+    });
 
     Ok(EvaluateResult {
         success: mesh.positions.len() > 0 && issues.iter().all(|i| i.severity != IssueSeverity::Error),
@@ -869,7 +931,7 @@ fn parse_vehicle_or_component(ron_str: &str) -> Result<Vehicle, String> {
     let comp: Component = from_str(ron_str).map_err(|_| {
         "Expected Vehicle(...) or Component(...) RON".to_string()
     })?;
-    Ok(Vehicle { parameters: None,
+    Ok(Vehicle { uid: None, parameters: None,
         name: "Export".into(),
         units: apro_document::vehicle::Units::Millimeters,
         components: vec![comp],
@@ -1190,12 +1252,242 @@ fn read_ai_instructions(app_handle: tauri::AppHandle) -> Result<String, String> 
     Ok(AI_INSTRUCTIONS_EMBEDDED.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// APRO Works platform bridge
+// ---------------------------------------------------------------------------
+
+/// What the UI needs to know to decide whether to offer a Publish button.
+#[derive(Debug, Serialize)]
+pub struct PlatformStatus {
+    /// False when aproCAD was started on its own rather than by the hub. Not an error.
+    pub connected: bool,
+    pub endpoint: Option<String>,
+    pub app_slug: String,
+    /// A sentence to show the user verbatim.
+    pub detail: String,
+    /// The artifact type this app publishes.
+    pub publishes: String,
+}
+
+/// Connect using the launch handshake, or explain why there is nothing to connect to.
+///
+/// The hub passes `--apro-product-slug`, `--apro-launch-token` and
+/// `--apro-store-endpoint`. `from_launch_environment` returns `Ok(None)` when no
+/// credential is present, which means "standalone" rather than "broken".
+fn platform_client() -> Result<apro_cad_bridge::apro_client::HttpStoreClient, String> {
+    match apro_cad_bridge::apro_client::HttpStoreClient::from_launch_environment() {
+        Ok(Some(client)) => Ok(client),
+        Ok(None) => Err(
+            "aproCAD is not connected to APRO Works. Launch it from the hub to publish \
+             mass properties."
+                .into(),
+        ),
+        Err(err) => Err(format!("Could not reach the APRO Works store: {err}")),
+    }
+}
+
+/// Report the connection state. Never fails, so the UI can always render something.
+#[tauri::command]
+async fn platform_status() -> Result<PlatformStatus, String> {
+    use apro_cad_bridge::apro_client::{read_discovery, AproStoreClient, HttpStoreClient};
+
+    let app_slug = apro_cad_bridge::APP_SLUG.to_string();
+    let publishes = apro_cad_bridge::apro_contracts::MASS_PROPERTIES_TYPE.to_string();
+
+    // The endpoint comes from the discovery file the hub writes, not from the health
+    // payload: a store reports its data directory there, which is not where you reach it.
+    let endpoint = read_discovery()
+        .ok()
+        .flatten()
+        .map(|discovery| discovery.endpoint);
+
+    match HttpStoreClient::from_launch_environment() {
+        Ok(Some(client)) => {
+            let detail = match client.health() {
+                Ok(health) => format!(
+                    "Connected to APRO Works (node {}, schema v{}).",
+                    &health.node_id[..health.node_id.len().min(8)],
+                    health.schema_version
+                ),
+                Err(err) => format!("Connected, but the store did not answer: {err}"),
+            };
+            Ok(PlatformStatus {
+                connected: true,
+                endpoint,
+                app_slug,
+                detail,
+                publishes,
+            })
+        }
+        Ok(None) => Ok(PlatformStatus {
+            connected: false,
+            endpoint,
+            app_slug,
+            publishes,
+            detail: "Standalone. Launch aproCAD from APRO Works to publish and share \
+                     this design."
+                .into(),
+        }),
+        Err(err) => Ok(PlatformStatus {
+            connected: false,
+            endpoint,
+            app_slug,
+            publishes,
+            detail: format!("Could not reach the APRO Works store: {err}"),
+        }),
+    }
+}
+
+/// Assign this design a stable identity, if it does not already have one.
+///
+/// Returns the updated document, because assigning an identity changes the saved file.
+#[tauri::command]
+async fn ensure_vehicle_uid(vehicle_ron: String) -> Result<String, String> {
+    let mut vehicle: Vehicle =
+        ron::from_str(&vehicle_ron).map_err(|e| format!("Failed to parse vehicle RON: {}", e))?;
+
+    if vehicle.uid.is_some() {
+        return Ok(vehicle_ron);
+    }
+    apro_cad_bridge::ensure_uid(&mut vehicle);
+    to_named_ron(&vehicle).map_err(|e| format!("Failed to serialize: {}", e))
+}
+
+/// The result of a publish, in the shape the UI wants to render.
+#[derive(Debug, Serialize)]
+pub struct PublishReport {
+    pub instance: String,
+    pub type_id: String,
+    pub revision_number: u32,
+    pub content_hash: String,
+    pub byte_size: u64,
+    /// Publishing an unchanged design is a no-op rather than an error.
+    pub unchanged: bool,
+    /// Set when this publish had to mint an identity for the design. The UI must persist
+    /// `updated_vehicle_ron` or the next publish would mint a *different* one.
+    pub assigned_uid: Option<String>,
+    pub updated_vehicle_ron: Option<String>,
+    /// A sentence to show the user verbatim.
+    pub summary: String,
+}
+
+/// Publish this design's mass properties to APRO Works.
+///
+/// The vehicle is re-evaluated here rather than trusting numbers the frontend is holding:
+/// the engine is cache-warm straight after a UI evaluation, so this is cheap, and it
+/// removes a whole class of "published what was on screen a minute ago" bugs.
+///
+/// `datum_offset_mm` is where the CAD origin sits in the consumer's body datum frame, in
+/// the document's own units. Omitted means the two frames coincide — stated explicitly,
+/// not assumed.
+#[tauri::command]
+async fn publish_mass_properties(
+    vehicle_ron: String,
+    datum_offset_mm: Option<[f64; 3]>,
+    label: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<PublishReport, String> {
+    let client = platform_client()?;
+
+    let mut vehicle: Vehicle =
+        ron::from_str(&vehicle_ron).map_err(|e| format!("Failed to parse vehicle RON: {}", e))?;
+
+    // Mint an identity if the document has none, and hand the updated document back so
+    // the caller can save it. Falling back to `name` instead would produce a different
+    // artifact every time the design is renamed.
+    let assigned_uid = if vehicle.uid.is_none() {
+        Some(apro_cad_bridge::ensure_uid(&mut vehicle))
+    } else {
+        None
+    };
+
+    let components: Vec<ComponentMesh> = {
+        let mut engine = state.engine.lock().map_err(|e| format!("Lock error: {}", e))?;
+        engine.evaluate_vehicle_with_progress(&vehicle, |_, _, _, _| {});
+        let vehicle = &vehicle;
+        engine
+            .component_meshes(vehicle)
+            .into_iter()
+            .map(|(name, material, color, m)| {
+                let visible = vehicle
+                    .components
+                    .iter()
+                    .find(|c| c.name == name)
+                    .map(|c| c.visible)
+                    .unwrap_or(true);
+                ComponentMesh {
+                    name,
+                    material,
+                    color,
+                    visible,
+                    positions: m.positions,
+                    normals: m.normals,
+                    indices: m.indices,
+                }
+            })
+            .collect()
+    };
+
+    let mass = combine_component_mass_props(&components).ok_or_else(|| {
+        "Nothing to publish: no component produced a mesh. Evaluate the design first."
+            .to_string()
+    })?;
+
+    let datum = match datum_offset_mm {
+        Some(offset) => apro_cad_bridge::DatumOffset::from_document_units(offset, &vehicle.units),
+        None => apro_cad_bridge::DatumOffset::coincident(),
+    };
+
+    // Reference geometry is derived from the assembly's bounding box, and the derivation
+    // records the convention it used so the consumer can disagree with it.
+    let reference = assembly_extent(&components).map(|extent| {
+        apro_cad_bridge::reference_geometry_from_extent(extent, LONGITUDINAL_AXIS, &vehicle.units)
+    });
+
+    let outcome = apro_cad_bridge::publish(
+        &client,
+        apro_cad_bridge::PublishRequest {
+            vehicle: &vehicle,
+            mass: &mass,
+            datum,
+            reference,
+            label: label.as_deref(),
+        },
+    )
+    .map_err(|err| err.to_string())?;
+
+    let updated_vehicle_ron = match &assigned_uid {
+        Some(_) => Some(to_named_ron(&vehicle).map_err(|e| format!("Failed to serialize: {}", e))?),
+        None => None,
+    };
+
+    let mut summary = outcome.summary();
+    if let Some(uid) = &assigned_uid {
+        summary.push_str(&format!(
+            ". Assigned this design the identity {uid} — save the document or the next \
+             publish will mint a different one."
+        ));
+    }
+
+    Ok(PublishReport {
+        instance: outcome.instance,
+        type_id: outcome.type_id,
+        revision_number: outcome.revision_number,
+        content_hash: outcome.content_hash,
+        byte_size: outcome.byte_size,
+        unchanged: outcome.unchanged,
+        assigned_uid,
+        updated_vehicle_ron,
+        summary,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file, check_interferences, needle_run, get_needle_schema, pick_file_dialog])
+        .invoke_handler(tauri::generate_handler![evaluate, evaluate_vehicle, validate, describe_vehicle, describe_parameters, modify_property, export_step, export_stl, apply_patch_vehicle, apply_patch_ron, read_ai_instructions, library_save, library_save_ron, library_retrieve, library_list, library_delete, library_update, library_bump_use, library_seed_builtins, get_ai_schema, json_to_ron, save_document_dialog, show_save_path_dialog, save_image_file, check_interferences, needle_run, get_needle_schema, pick_file_dialog, platform_status, ensure_vehicle_uid, publish_mass_properties])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

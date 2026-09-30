@@ -261,6 +261,30 @@
               <div class="insp-row"><span class="k">Volume</span><span class="v" id="ux-insp-volume">—</span></div>
               <div class="insp-row"><span class="k">CoM</span><span class="v" id="ux-insp-com">—</span></div>
             </div>
+            <div class="insp-card" id="platform-card">
+              <h4>APRO Works</h4>
+              <div class="insp-row">
+                <span class="k">Store</span>
+                <span class="v" id="platform-state">checking…</span>
+              </div>
+              <div class="insp-row">
+                <span class="k">Identity</span>
+                <span class="v" id="platform-uid">—</span>
+              </div>
+              <p class="platform-note" id="platform-note"></p>
+              <label class="platform-datum">
+                <span>CAD origin in body datum (mm)</span>
+                <span class="platform-datum-fields">
+                  <input type="number" id="platform-datum-x" step="any" value="0" title="X offset" />
+                  <input type="number" id="platform-datum-y" step="any" value="0" title="Y offset" />
+                  <input type="number" id="platform-datum-z" step="any" value="0" title="Z offset" />
+                </span>
+              </label>
+              <button type="button" id="platform-publish" class="platform-btn" disabled>
+                Publish mass properties
+              </button>
+              <p class="platform-note" id="platform-result"></p>
+            </div>
             <div class="insp-card">
               <h4>Mesh</h4>
               <div class="insp-row"><span class="k">Triangles</span><span class="v" id="ux-insp-tris">0</span></div>

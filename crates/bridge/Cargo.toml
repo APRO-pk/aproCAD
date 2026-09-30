@@ -1,0 +1,20 @@
+[package]
+name = "apro-cad-bridge"
+version = "0.1.0"
+edition = "2021"
+description = "Publishes aproCAD mass properties to the APRO Works orchestration store."
+
+[dependencies]
+apro-document = { path = "../document" }
+apro-massprops = { path = "../massprops" }
+
+# The published SDK, exactly as any product app would depend on it.
+apro-contracts = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.3.0" }
+apro-client = { git = "https://github.com/APRO-pk/apro-client", tag = "v0.3.0" }
+
+serde = { version = "1", features = ["serde_derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+ron = "0.8"

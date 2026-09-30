@@ -6166,3 +6166,122 @@ animate();
 
 // Boot diagnostics: module fully evaluated.
 if (window.__boot) window.__boot.push('main: fully loaded');
+
+// ===== APRO Works platform panel =====
+// Publishes this design's mass properties to the orchestration store so other apps
+// (HexaDOF today) can pull them. Every affordance here is real: the button stays
+// disabled unless a store is actually reachable, and it explains why.
+(function initPlatformPanel() {
+  const invoke = tauriInvoke();
+  const $ = (id) => document.getElementById(id);
+
+  const stateEl = $('platform-state');
+  const uidEl = $('platform-uid');
+  const noteEl = $('platform-note');
+  const resultEl = $('platform-result');
+  const publishBtn = $('platform-publish');
+  if (!stateEl || !publishBtn) return;
+
+  if (!invoke) {
+    stateEl.textContent = 'unavailable';
+    noteEl.textContent = 'Not running inside the desktop shell.';
+    return;
+  }
+
+  let status = null;
+
+  const notify = (msg, kind, ms) => window.__ux?.notify?.(msg, kind, ms);
+
+  function setNote(el, text, kind) {
+    el.textContent = text || '';
+    el.className = 'platform-note' + (kind ? ' ' + kind : '');
+  }
+
+  function render() {
+    const connected = !!status?.connected;
+    stateEl.textContent = connected ? 'connected' : 'standalone';
+    stateEl.className = 'v' + (connected ? ' teal' : '');
+    setNote(noteEl, status?.detail || '', connected ? 'ok' : '');
+
+    const uid = currentUid();
+    uidEl.textContent = uid || 'not assigned';
+
+    publishBtn.disabled = !connected;
+    publishBtn.title = connected
+      ? 'Publish SI mass properties to APRO Works'
+      : 'Launch aproCAD from APRO Works to publish';
+  }
+
+  /** The identity this design will publish under, read from the document itself. */
+  function currentUid() {
+    const match = (editor.value || '').match(/\buid\s*:\s*(?:Some\(\s*)?"([^"]*)"/);
+    return match ? match[1].trim() : '';
+  }
+
+  /**
+   * The declared datum offset, in the document's own units.
+   * Returns null when every component is zero, which the backend reads as
+   * "the CAD origin is the body datum".
+   */
+  function datumOffset() {
+    const read = (id) => {
+      const raw = $(id)?.value;
+      const value = raw === '' || raw == null ? 0 : Number(raw);
+      return Number.isFinite(value) ? value : 0;
+    };
+    const offset = [read('platform-datum-x'), read('platform-datum-y'), read('platform-datum-z')];
+    return offset.every((v) => v === 0) ? null : offset;
+  }
+
+  async function refresh() {
+    try {
+      status = await invoke('platform_status');
+    } catch (err) {
+      status = { connected: false, detail: String(err) };
+    }
+    render();
+  }
+
+  async function publish() {
+    const ron = wrapRon(editor.value || '');
+    if (!ron.trim()) {
+      setNote(resultEl, 'Nothing to publish: the document is empty.', 'err');
+      return;
+    }
+
+    const original = publishBtn.textContent;
+    publishBtn.disabled = true;
+    publishBtn.textContent = 'Publishing…';
+    setNote(resultEl, '');
+
+    try {
+      const report = await invoke('publish_mass_properties', {
+        vehicleRon: ron,
+        datumOffsetMm: datumOffset(),
+        label: null,
+      });
+
+      // A first publish mints an identity. Persist it, or the next publish would mint a
+      // different one and every consumer would see a brand-new vehicle.
+      if (report.updatedVehicleRon) {
+        editor.value = report.updatedVehicleRon;
+        updateKindBadge();
+      }
+
+      setNote(resultEl, report.summary, 'ok');
+      notify(report.summary, report.unchanged ? 'info' : 'ok', 6000);
+    } catch (err) {
+      setNote(resultEl, String(err), 'err');
+      notify(String(err), 'err', 6000);
+    } finally {
+      publishBtn.textContent = original;
+      render();
+    }
+  }
+
+  publishBtn.addEventListener('click', publish);
+  // The identity lives in the document text, so it can appear or vanish as the user edits.
+  editor.addEventListener('input', render);
+
+  refresh();
+})();

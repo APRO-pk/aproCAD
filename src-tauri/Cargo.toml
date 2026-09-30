@@ -25,6 +25,9 @@ apro-recompute = { path = "../crates/recompute" }
 apro-massprops = { path = "../crates/massprops" }
 apro-library = { path = "../crates/library" }
 apro-grammar = { path = "../crates/grammar" }
+# The APRO Works publish bridge. It owns the unit conversion and the identity rules, so
+# the command layer here stays thin.
+apro-cad-bridge = { path = "../crates/bridge" }
 
 [features]
 # Production builds.
